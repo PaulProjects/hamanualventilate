@@ -1,0 +1,104 @@
+{
+  "common": {
+    "version": "Version",
+    "invalid_configuration": "Invalid configuration"
+  },
+  "card": {
+    "title_default": "Ventilation Guide",
+    "outdoor": "Outdoor",
+    "temperature": "Temperature",
+    "humidity": "Humidity",
+    "abs_humidity": "Abs. Humidity",
+    "unavailable": "Unavailable",
+    "unknown": "Unknown"
+  },
+  "goal": {
+    "cooling": "Cooling",
+    "warming": "Warming",
+    "humidity": "Humidity",
+    "balanced": "Balanced"
+  },
+  "status": {
+    "ventilate_now": "Open",
+    "do_not_ventilate": "Closed",
+    "caution": "Caution",
+    "unknown": "Unknown"
+  },
+  "reason": {
+    "cooling_ok": "{delta}°C cooler outside",
+    "cooling_no": "Warmer outside ({outdoor_temp}°C)",
+    "warming_ok": "Warmer outside, drier air",
+    "warming_no": "Would cool the room down",
+    "warming_humidity_caution": "Humidity exceeds max ({indoor_rh}% > {max_rh}%) — ventilating dehumidifies, but cools room",
+    "humidity_ok": "Drier air outside ({delta} g/m³ less)",
+    "humidity_no": "Outdoor air is more humid",
+    "humidity_max_exceeded": "Humidity exceeds max ({indoor_rh}% > {max_rh}%) — drier air outside ({delta} g/m³ less)",
+    "humidity_min_reached": "Indoor humidity ({indoor_rh}%) is already below min ({min_rh}%)",
+    "humidity_within_range": "Indoor humidity ({indoor_rh}%) does not exceed max ({max_rh}%)",
+    "temp_max_exceeded": "Temperature exceeds max ({indoor_temp}°C > {max_temp}°C) — {delta}°C cooler outside",
+    "balanced_cool": "Cooling: {delta}°C cooler outside",
+    "balanced_humid": "Dehumidifying: drier air outside",
+    "balanced_no": "No ventilation benefit right now",
+    "no_data": "Missing sensor data"
+  },
+  "forecast": {
+    "ventilate_until": "Ventilate until approx. {time}",
+    "ventilate_from": "Can ventilate from approx. {time}",
+    "no_forecast": "No forecast data available",
+    "active_now": "Active now until {time}",
+    "next_open": "Next open: {start} – {end}",
+    "no_upcoming": "No windows predicted"
+  },
+  "modal": {
+    "details_title": "Room Climate & Ventilation Details",
+    "climate_comparison": "Indoor vs. Outdoor Climate",
+    "indoor": "Indoor",
+    "outdoor": "Outdoor",
+    "delta": "Delta",
+    "upcoming_windows": "Upcoming Ventilation Schedule",
+    "close": "Close"
+  },
+  "window": {
+    "open": "Open",
+    "closed": "Closed",
+    "correct": "As expected",
+    "incorrect": "Action needed!"
+  },
+  "editor": {
+    "general": "General",
+    "thresholds": "Thresholds & Limits",
+    "visuals": "Visuals",
+    "outdoor_sensors": "Outdoor Sensors",
+    "rooms": "Rooms",
+    "title": "Title",
+    "goal": "Goal",
+    "goal_cooling": "Cooling — cool rooms down",
+    "goal_warming": "Warming — keep heat in",
+    "goal_humidity": "Humidity — reduce moisture",
+    "goal_balanced": "Balanced — cooling + humidity",
+    "max_temperature": "Max. Temperature (°C)",
+    "min_humidity": "Min. Humidity (%)",
+    "max_humidity": "Max. Humidity (%)",
+    "ah_threshold": "AH Threshold (g/m³)",
+    "show_values": "Display Sensor Values",
+    "show_absolute_humidity": "Display Absolute Humidity (g/m³)",
+    "show_forecast": "Display Forecast Summary",
+    "show_inline_forecast": "Expand Forecast Inline (legacy)",
+    "weather_entity": "Weather Entity (for forecast)",
+    "outdoor_temperature": "Outdoor Temperature Sensor",
+    "outdoor_humidity": "Outdoor Humidity Sensor",
+    "add_room": "Add Room",
+    "room_name": "Room Name",
+    "room_icon": "Icon",
+    "room_temperature": "Temperature Sensor (required)",
+    "room_humidity": "Humidity Sensor",
+    "room_window": "Window Sensor",
+    "overrides": "Per-Room Overrides",
+    "outdoor_temp_override": "Custom Outdoor Temp Sensor",
+    "outdoor_humidity_override": "Custom Outdoor Humidity Sensor",
+    "max_temp_override": "Max Temperature Override (°C)",
+    "max_humidity_override": "Max Humidity Override (%)",
+    "min_humidity_override": "Min Humidity Override (%)",
+    "remove_room": "Remove"
+  }
+}

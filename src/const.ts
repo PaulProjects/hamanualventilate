@@ -1,0 +1,17 @@
+export const CARD_VERSION = '1.1.0';
+export const CARD_NAME = 'ventilation-card';
+export const CARD_DESCRIPTION = 'Smart manual ventilation guidance based on indoor/outdoor climate data';
+
+// Default absolute humidity threshold in g/m³
+// Ventilation is recommended when indoor AH exceeds outdoor AH by this amount
+export const DEFAULT_AH_THRESHOLD = 2;
+
+// Default humidity limits (relative humidity %)
+export const DEFAULT_MIN_HUMIDITY = 40;
+export const DEFAULT_MAX_HUMIDITY = 60;
+
+// Default balanced mode max temperature
+export const DEFAULT_BALANCED_MAX_TEMP = 24;
+
+// Default room icon
+export const DEFAULT_ROOM_ICON = 'mdi:home-thermometer';
