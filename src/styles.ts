@@ -11,26 +11,33 @@ export const cardStyles = css`
   }
 
   ha-card {
+    background: transparent;
+    border: none;
+    box-shadow: none;
     overflow: hidden;
   }
 
-  .card-header {
+  .card-header,
+  .card-header-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: var(--vc-spacing) var(--vc-spacing) 0 var(--vc-spacing);
   }
 
-  .card-header .title {
+  .card-header .title,
+  .card-header-title {
     font-size: 16px;
-    font-weight: 500;
+    font-weight: 600;
     color: var(--primary-text-color);
     display: flex;
     align-items: center;
     gap: 8px;
   }
 
-  .card-header .title ha-icon {
+  .card-header .title ha-icon,
+  .card-header-title ha-icon,
+  .card-header-title .header-icon {
     color: var(--primary-color);
     --mdc-icon-size: 20px;
   }
@@ -42,15 +49,18 @@ export const cardStyles = css`
   }
 
   .goal-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     font-size: 11px;
-    font-weight: 500;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    padding: 3px 10px;
+    padding: 4px 10px;
     border-radius: 12px;
-    background: var(--primary-color);
-    color: var(--text-primary-color, #fff);
-    opacity: 0.9;
+    background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+    color: var(--primary-color);
+    border: 1px solid color-mix(in srgb, var(--primary-color) 30%, transparent);
   }
 
   /* Top Right Warning / Health Badge with Hover Tooltip */
@@ -332,84 +342,110 @@ export const cardStyles = css`
     color: var(--secondary-text-color);
   }
 
+  .climate-pill-badge .pill-humidity-icon {
+    margin-left: 3px;
+  }
+
   .outdoor-expanded-panel {
-    margin-top: 10px;
-    margin-left: 36px;
-    padding-top: 10px;
-    border-top: 1px dashed var(--divider-color, rgba(255, 255, 255, 0.12));
+    margin-top: 8px;
+    margin-left: 0;
+    padding-top: 0;
+    border-top: none;
+    width: 100%;
     display: flex;
     flex-direction: column;
     gap: 10px;
     animation: vc-slide-down 0.18s ease-out;
   }
 
-  .outdoor-forecast-graph-container {
+  /* ── Integrated Home Assistant Style Sparkline Line Graph ──────── */
+  .integrated-graph-card {
+    position: relative;
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    border-radius: 0;
+    padding: 6px 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding-top: 4px;
-  }
-
-  .outdoor-forecast-graph-container .graph-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--secondary-text-color);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .outdoor-forecast-graph-container .graph-header ha-icon {
-    --mdc-icon-size: 14px;
-    color: var(--primary-color);
-  }
-
-  .forecast-bars-grid {
-    display: flex;
-    align-items: flex-end;
-    gap: 8px;
-    overflow-x: auto;
-    padding-bottom: 4px;
-    padding-top: 6px;
-  }
-
-  .forecast-bar-col {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    min-width: 32px;
-    flex-shrink: 0;
-  }
-
-  .bar-temp-val {
-    font-size: 10px;
-    font-weight: 600;
-    color: var(--primary-text-color);
-  }
-
-  .bar-track {
-    width: 8px;
-    height: 48px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-    display: flex;
-    align-items: flex-end;
     overflow: hidden;
   }
 
-  .bar-fill {
-    width: 100%;
-    border-radius: 4px;
-    background: var(--primary-color, #2196f3);
-    transition: height 0.3s ease;
+  .graph-floating-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 2;
   }
 
-  .bar-time-lbl {
-    font-size: 9px;
+  .graph-current-stats {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .weighty-stat {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+  }
+
+  .weighty-stat .stat-icon {
+    --mdc-icon-size: 16px;
+    color: var(--primary-color);
+    align-self: center;
+  }
+
+  .weighty-stat .stat-icon.hum {
+    color: var(--vc-blue, #2196f3);
+  }
+
+  .weighty-stat .weighty-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--primary-text-color);
+    line-height: 1;
+    letter-spacing: -0.5px;
+  }
+
+  .weighty-stat .weighty-unit {
+    font-size: 12px;
+    font-weight: 500;
     color: var(--secondary-text-color);
+  }
+
+  .graph-range-pill {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--secondary-text-color);
+    background: color-mix(in srgb, var(--primary-text-color) 6%, transparent);
+    padding: 2px 8px;
+    border-radius: 10px;
+  }
+
+  .graph-svg-wrapper {
+    width: 100%;
+    height: 70px;
+    position: relative;
+    margin-top: 4px;
+  }
+
+  .forecast-svg-chart {
+    width: 100%;
+    height: 100%;
+    display: block;
+    overflow: visible;
+  }
+
+  .graph-time-axis {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--secondary-text-color);
+    padding-top: 4px;
+    border-top: 1px dashed var(--divider-color, rgba(255, 255, 255, 0.08));
   }
 
   .outdoor-forecast-empty {
@@ -627,7 +663,7 @@ export const cardStyles = css`
     gap: 6px;
     font-size: 12px;
     color: var(--secondary-text-color);
-    margin-left: 42px;
+    margin-left: 0;
   }
 
   .room-outdoor ha-icon {
@@ -711,7 +747,7 @@ export const cardStyles = css`
     gap: 4px;
     font-size: 12px;
     color: var(--secondary-text-color);
-    margin-left: 42px;
+    margin-left: 0;
   }
 
   .room-forecast-hint ha-icon {
@@ -783,7 +819,7 @@ export const cardStyles = css`
   /* ── Upcoming Ventilation Windows (Clean & Integrated List) ─── */
   .forecast-windows-section {
     margin-top: 6px;
-    margin-left: 42px;
+    margin-left: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -878,7 +914,7 @@ export const cardStyles = css`
     gap: 6px;
     font-size: 12px;
     color: var(--secondary-text-color);
-    margin-left: 42px;
+    margin-left: 0;
     margin-top: 4px;
   }
 
@@ -938,7 +974,7 @@ export const cardStyles = css`
     border: 1px solid color-mix(in srgb, var(--primary-text-color) 12%, transparent);
     cursor: pointer;
     transition: all 0.15s ease;
-    margin-left: 42px;
+    margin-left: 0;
     margin-top: 4px;
     width: fit-content;
   }
@@ -1127,10 +1163,11 @@ export const cardStyles = css`
   }
 
   .room-expanded-panel {
-    margin-top: 10px;
-    margin-left: 42px;
-    padding-top: 12px;
-    border-top: 1px dashed var(--divider-color, rgba(255, 255, 255, 0.12));
+    margin-top: 8px;
+    margin-left: 0;
+    padding-top: 0;
+    border-top: none;
+    width: 100%;
     display: flex;
     flex-direction: column;
     gap: 12px;
@@ -1236,5 +1273,162 @@ export const cardStyles = css`
       grid-template-columns: 1fr;
     }
   }
+
+  /* ── Interactive Graph Hover & Crosshair ───────────────────── */
+  .graph-svg-wrapper {
+    position: relative;
+    width: 100%;
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  .hover-crosshair {
+    stroke: var(--primary-color, #2196f3);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+    opacity: 0.8;
+  }
+
+  .hover-marker {
+    fill: var(--ha-card-background, var(--card-background-color, #1c1c1e));
+    stroke-width: 2.5;
+    transition: r 0.1s ease;
+  }
+
+  .graph-floating-header .hover-time-tag {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--primary-color);
+    background: color-mix(in srgb, var(--primary-color) 14%, transparent);
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 4px;
+  }
+
+  /* ── Next State Change Badge ────────────────────────────────── */
+  .next-state-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
+    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.1));
+    color: var(--primary-text-color);
+    transition: all 0.2s ease;
+  }
+
+  .next-state-chip.to-open {
+    background: color-mix(in srgb, var(--vc-green) 14%, transparent);
+    border-color: color-mix(in srgb, var(--vc-green) 30%, transparent);
+    color: var(--vc-green);
+  }
+
+  .next-state-chip.to-closed {
+    background: color-mix(in srgb, var(--vc-yellow) 14%, transparent);
+    border-color: color-mix(in srgb, var(--vc-yellow) 30%, transparent);
+    color: var(--vc-yellow);
+  }
+
+  .next-state-chip ha-icon {
+    --mdc-icon-size: 13px;
+  }
+
+  /* ── Room Temperature Prediction Graph ─────────────────────── */
+  .prediction-graph-card {
+    background: color-mix(in srgb, var(--primary-text-color) 3%, transparent);
+    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
+    border-radius: 12px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .prediction-legend {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 11px;
+    color: var(--secondary-text-color);
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .legend-color {
+    width: 10px;
+    height: 3px;
+    border-radius: 2px;
+  }
+
+  .legend-color.predicted-room {
+    background: var(--vc-green, #10b981);
+  }
+
+  .legend-color.outdoor-reference {
+    background: var(--primary-color, #2196f3);
+    border-top: 1px dashed var(--primary-color, #2196f3);
+  }
+
+  .legend-color.openable-zone {
+    background: color-mix(in srgb, var(--vc-green) 40%, transparent);
+    height: 8px;
+    border-radius: 2px;
+  }
+
+  .openable-zone-band {
+    fill: var(--vc-green, #10b981);
+    opacity: 0.15;
+  }
+
+  /* ── Unified Outdoor Accordion Row ──────────────────────────── */
+  .outdoor-section {
+    margin-bottom: var(--vc-spacing);
+    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
+    padding-bottom: 12px;
+  }
+
+  .outdoor-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+    padding: 4px 0;
+  }
+
+  .outdoor-title-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .outdoor-icon-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    color: var(--primary-color);
+  }
+
+  .outdoor-icon-avatar ha-icon {
+    --mdc-icon-size: 18px;
+  }
+
+  .outdoor-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--primary-text-color);
+  }
 `;
+
 

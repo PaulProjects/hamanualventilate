@@ -5,7 +5,7 @@
  * indoor/outdoor conditions, and optional per-room overrides.
  */
 
-import type { VentilationGoal, SensorReadings, VentilationStatus, RoomAdvice, RoomConfig, ForecastEntry } from '../types';
+import type { VentilationGoal, SensorReadings, VentilationStatus, RoomAdvice, RoomConfig, ForecastEntry, NextStateChange, ForecastWindow } from '../types';
 import { VentilationStatus as VS } from '../types';
 import { calculateAbsoluteHumidity } from './humidity';
 import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_ROOM_ICON } from '../const';
@@ -14,6 +14,62 @@ import type { HomeAssistant } from 'custom-card-helpers';
 import { computeForecastWindow } from './forecast';
 
 /* ── Helpers ────────────────────────────────────────────────────── */
+
+export function computeNextStateChange(
+  status: VentilationStatus,
+  forecastWindow: ForecastWindow | null,
+): NextStateChange | null {
+  if (!forecastWindow || status === VS.UNKNOWN) return null;
+
+  const now = new Date();
+  const windows = forecastWindow.upcomingWindows || [];
+
+  if (status === VS.VENTILATE_NOW) {
+    const activeWin = windows.find((w) => w.isCurrent) || windows[0];
+    if (!activeWin) return null;
+
+    const targetTime = activeWin.end;
+    const diffMs = targetTime.getTime() - now.getTime();
+    if (diffMs <= 0) return null;
+
+    let formattedTime = '';
+    if (diffMs >= 3600 * 1000) {
+      formattedTime = `${Math.round(diffMs / (3600 * 1000))}h`;
+    } else {
+      formattedTime = `${Math.max(1, Math.round(diffMs / (60 * 1000)))}m`;
+    }
+
+    return {
+      targetState: 'closed',
+      timeRemainingMs: diffMs,
+      formattedTime,
+      targetTime,
+    };
+  } else if (status === VS.DO_NOT_VENTILATE || status === VS.CAUTION) {
+    const nextWin = windows.find((w) => w.start > now) || windows.find((w) => !w.isCurrent);
+    if (!nextWin) return null;
+
+    const targetTime = nextWin.start;
+    const diffMs = targetTime.getTime() - now.getTime();
+    if (diffMs <= 0) return null;
+
+    let formattedTime = '';
+    if (diffMs >= 3600 * 1000) {
+      formattedTime = `${Math.round(diffMs / (3600 * 1000))}h`;
+    } else {
+      formattedTime = `${Math.max(1, Math.round(diffMs / (60 * 1000)))}m`;
+    }
+
+    return {
+      targetState: 'open',
+      timeRemainingMs: diffMs,
+      formattedTime,
+      targetTime,
+    };
+  }
+
+  return null;
+}
 
 export function readSensor(hass: HomeAssistant, entityId: string | undefined): number | null {
   if (!entityId) return null;
@@ -173,6 +229,8 @@ export function getVentilationAdvice(
     resolvedRoomName = 'Room';
   }
 
+  const nextStateChange = computeNextStateChange(status, forecastWindow);
+
   return {
     roomName: resolvedRoomName,
     roomIcon: room.icon || DEFAULT_ROOM_ICON,
@@ -184,6 +242,7 @@ export function getVentilationAdvice(
     forecastWindow,
     windowState,
     windowCorrect,
+    nextStateChange,
   };
 }
 

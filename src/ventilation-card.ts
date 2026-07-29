@@ -2,13 +2,14 @@ import { LitElement, html, TemplateResult, PropertyValues, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, LovelaceCardEditor } from 'custom-card-helpers';
 
-import type { VentilationCardConfig, RoomConfig, RoomAdvice, ForecastEntry, SensorReadings, HealthIssue, ForecastWindow, VentilationWindowRange } from './types';
+import type { VentilationCardConfig, RoomConfig, RoomAdvice, ForecastEntry, SensorReadings, HealthIssue, ForecastWindow, VentilationWindowRange, PredictionPoint } from './types';
 import { VentilationStatus } from './types';
 import { CARD_VERSION, CARD_NAME, DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP } from './const';
 import { cardStyles } from './styles';
 import { localize } from './localize/localize';
 import { getVentilationAdvice, getSensorReadings, readSensor } from './utils/ventilation-logic';
 import { subscribeForecast, extractForecastItems } from './utils/forecast';
+import { predictRoomTemperatureSeries } from './utils/thermal-prediction';
 
 /* ── Console banner ─────────────────────────────────────────── */
 console.info(
@@ -51,6 +52,9 @@ export class VentilationCard extends LitElement {
   @state() private forecast: ForecastEntry[] = [];
   @state() private _showHealthBanner = false;
   @state() private _expandedRoomIndex: number | null = null;
+  @state() private _expandedOutdoor = false;
+  @state() private _outdoorHoverIndex: number | null = null;
+  @state() private _roomHoverIndices: Record<number, number | null> = {};
 
   private _forecastUnsub?: () => void;
   private _subscribedEntity?: string;
@@ -74,6 +78,10 @@ export class VentilationCard extends LitElement {
       show_absolute_humidity: true,
       show_forecast: true,
       show_inline_forecast: false,
+      forecast_hours: 24,
+      show_next_state_change: true,
+      insulation_factor: 0.05,
+      ventilation_speed: 0.35,
       ...config,
       goal: config.goal || 'cooling',
     };
@@ -96,7 +104,10 @@ export class VentilationCard extends LitElement {
       changedProps.has('config') ||
       changedProps.has('forecast') ||
       changedProps.has('_showHealthBanner') ||
-      changedProps.has('_expandedRoomIndex')
+      changedProps.has('_expandedRoomIndex') ||
+      changedProps.has('_expandedOutdoor') ||
+      changedProps.has('_outdoorHoverIndex') ||
+      changedProps.has('_roomHoverIndices')
     ) {
       return true;
     }
@@ -223,6 +234,27 @@ export class VentilationCard extends LitElement {
     this.dispatchEvent(event);
   }
 
+  private _renderHealthBanner(issues: HealthIssue[]): TemplateResult {
+    return html`
+      <div class="health-banner">
+        <div class="health-banner-title">
+          <ha-icon icon="mdi:alert"></ha-icon>
+          <span>System Diagnostics (${issues.length})</span>
+        </div>
+        <ul class="health-issue-list">
+          ${issues.map(
+            (issue) => html`
+              <li class="health-issue-item severity-${issue.severity}">
+                <ha-icon icon="${issue.severity === 'error' ? 'mdi:close-circle' : 'mdi:alert-circle'}"></ha-icon>
+                <span>${issue.message}</span>
+              </li>
+            `,
+          )}
+        </ul>
+      </div>
+    `;
+  }
+
   private _renderGoalBadge(): TemplateResult {
     const goal = this.config.goal || 'cooling';
     const goalLabel = localize(`goal.${goal}`);
@@ -240,8 +272,43 @@ export class VentilationCard extends LitElement {
     `;
   }
 
+  private _handleOutdoorMouseMove(e: MouseEvent, totalPoints: number): void {
+    if (totalPoints <= 0) return;
+    const svg = e.currentTarget as SVGElement;
+    const rect = svg.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, x / rect.width));
+    const idx = Math.round(ratio * (totalPoints - 1));
+    if (this._outdoorHoverIndex !== idx) {
+      this._outdoorHoverIndex = idx;
+    }
+  }
+
+  private _handleOutdoorMouseLeave(): void {
+    if (this._outdoorHoverIndex !== null) {
+      this._outdoorHoverIndex = null;
+    }
+  }
+
+  private _handleRoomMouseMove(e: MouseEvent, roomIdx: number, totalPoints: number): void {
+    if (totalPoints <= 0) return;
+    const svg = e.currentTarget as SVGElement;
+    const rect = svg.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, x / rect.width));
+    const idx = Math.round(ratio * (totalPoints - 1));
+    if (this._roomHoverIndices[roomIdx] !== idx) {
+      this._roomHoverIndices = { ...this._roomHoverIndices, [roomIdx]: idx };
+    }
+  }
+
+  private _handleRoomMouseLeave(roomIdx: number): void {
+    if (this._roomHoverIndices[roomIdx] !== null) {
+      this._roomHoverIndices = { ...this._roomHoverIndices, [roomIdx]: null };
+    }
+  }
+
   private _renderOutdoor(outdoor: SensorReadings): TemplateResult {
-    const showAbsHum = this.config.show_absolute_humidity !== false;
     const tempEntity = this.config.outdoor_temperature || this.config.weather_entity;
     const humidityEntity = this.config.outdoor_humidity || this.config.weather_entity;
     const mainEntity = tempEntity || humidityEntity || this.config.weather_entity;
@@ -254,12 +321,14 @@ export class VentilationCard extends LitElement {
 
     return html`
       <div class="outdoor-section">
-        <div class="outdoor-header">
-          <div
-            class="outdoor-title-group ${mainEntity ? 'clickable' : ''}"
-            @click=${() => mainEntity && this._handleMoreInfo(mainEntity)}
-            title="${mainEntity ? `View details for ${mainEntity}` : ''}"
-          >
+        <div
+          class="outdoor-header"
+          @click=${() => {
+            this._expandedOutdoor = !this._expandedOutdoor;
+          }}
+          title="${this._expandedOutdoor ? 'Collapse outdoor details' : 'Expand outdoor details & forecast'}"
+        >
+          <div class="outdoor-title-group">
             <div class="outdoor-icon-avatar">
               <ha-icon icon="mdi:home-export-outline"></ha-icon>
             </div>
@@ -267,19 +336,6 @@ export class VentilationCard extends LitElement {
           </div>
 
           <div class="outdoor-header-badges">
-            ${weatherStateText
-              ? html`
-                  <div
-                    class="outdoor-weather-badge ${this.config.weather_entity ? 'clickable' : ''}"
-                    @click=${() => this._handleMoreInfo(this.config.weather_entity)}
-                    title="${this.config.weather_entity ? `View weather for ${this.config.weather_entity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:weather-partly-cloudy"></ha-icon>
-                    <span>${weatherStateText}</span>
-                  </div>
-                `
-              : nothing}
-
             ${outdoor.temperature !== null
               ? html`
                   <div
@@ -293,18 +349,37 @@ export class VentilationCard extends LitElement {
                     title="Outdoor climate summary"
                   >
                     <ha-icon icon="mdi:thermometer"></ha-icon>
-                    <span>${outdoor.temperature.toFixed(1)}°C${outdoor.humidity !== null ? ` · ${outdoor.humidity.toFixed(0)}%` : ''}</span>
+                    <span>${outdoor.temperature.toFixed(1)}°C</span>
+                    ${outdoor.humidity !== null
+                      ? html`
+                          <ha-icon icon="mdi:water-percent" class="pill-humidity-icon"></ha-icon>
+                          <span>${outdoor.humidity.toFixed(0)}%</span>
+                        `
+                      : nothing}
+                  </div>
+                `
+              : nothing}
+
+            ${weatherStateText
+              ? html`
+                  <div
+                    class="outdoor-weather-badge ${this.config.weather_entity ? 'clickable' : ''}"
+                    @click=${(e: Event) => {
+                      if (this.config.weather_entity) {
+                        e.stopPropagation();
+                        this._handleMoreInfo(this.config.weather_entity);
+                      }
+                    }}
+                    title="${this.config.weather_entity ? `View weather for ${this.config.weather_entity}` : ''}"
+                  >
+                    <ha-icon icon="mdi:weather-partly-cloudy"></ha-icon>
+                    <span>${weatherStateText}</span>
                   </div>
                 `
               : nothing}
 
             <div
               class="outdoor-details-trigger ${this._expandedOutdoor ? 'expanded' : ''}"
-              @click=${(e: Event) => {
-                e.stopPropagation();
-                this._expandedOutdoor = !this._expandedOutdoor;
-                this.requestUpdate();
-              }}
               title="${this._expandedOutdoor ? 'Collapse outdoor details' : 'Expand outdoor details & forecast'}"
             >
               <ha-icon icon="${this._expandedOutdoor ? 'mdi:chevron-up' : 'mdi:chevron-down'}"></ha-icon>
@@ -315,49 +390,7 @@ export class VentilationCard extends LitElement {
         ${this._expandedOutdoor
           ? html`
               <div class="outdoor-expanded-panel" @click=${(e: Event) => e.stopPropagation()}>
-                <div class="room-values">
-                  ${outdoor.temperature !== null
-                    ? html`
-                        <span
-                          class="sensor-value ${tempEntity ? 'clickable' : ''}"
-                          @click=${() => tempEntity && this._handleMoreInfo(tempEntity)}
-                          title="${tempEntity ? `View graph for ${tempEntity}` : ''}"
-                        >
-                          <ha-icon icon="mdi:thermometer"></ha-icon>
-                          <span class="value">${outdoor.temperature.toFixed(1)}</span>
-                          <span class="unit">°C</span>
-                        </span>
-                      `
-                    : nothing}
-                  ${outdoor.humidity !== null
-                    ? html`
-                        <span
-                          class="sensor-value ${humidityEntity ? 'clickable' : ''}"
-                          @click=${() => humidityEntity && this._handleMoreInfo(humidityEntity)}
-                          title="${humidityEntity ? `View graph for ${humidityEntity}` : ''}"
-                        >
-                          <ha-icon icon="mdi:water-percent"></ha-icon>
-                          <span class="value">${outdoor.humidity.toFixed(0)}</span>
-                          <span class="unit">%</span>
-                        </span>
-                      `
-                    : nothing}
-                  ${showAbsHum && outdoor.absoluteHumidity !== null
-                    ? html`
-                        <span
-                          class="sensor-value ${mainEntity ? 'clickable' : ''}"
-                          @click=${() => mainEntity && this._handleMoreInfo(mainEntity)}
-                          title="${mainEntity ? `View graph for ${mainEntity}` : ''}"
-                        >
-                          <ha-icon icon="mdi:water"></ha-icon>
-                          <span class="value">${outdoor.absoluteHumidity.toFixed(1)}</span>
-                          <span class="unit">g/m³</span>
-                        </span>
-                      `
-                    : nothing}
-                </div>
-
-                ${this._renderOutdoorForecastGraph()}
+                ${this._renderOutdoorForecastGraph(outdoor)}
               </div>
             `
           : nothing}
@@ -365,8 +398,9 @@ export class VentilationCard extends LitElement {
     `;
   }
 
-  private _renderOutdoorForecastGraph(): TemplateResult {
-    const forecast = this._getEffectiveForecast().slice(0, 12);
+  private _renderOutdoorForecastGraph(outdoor: SensorReadings): TemplateResult {
+    const hours = this.config.forecast_hours ?? 24;
+    const forecast = this._getEffectiveForecast().slice(0, hours);
     if (!forecast || forecast.length === 0) {
       return html`
         <div class="outdoor-forecast-empty">
@@ -377,34 +411,147 @@ export class VentilationCard extends LitElement {
     }
 
     const temps = forecast.map((f) => f.temperature);
-    const minTemp = Math.floor(Math.min(...temps) - 1);
-    const maxTemp = Math.ceil(Math.max(...temps) + 1);
+    const rawMin = Math.min(...temps);
+    const rawMax = Math.max(...temps);
+    const pad = Math.max(1, (rawMax - rawMin) * 0.15);
+    const minTemp = Math.floor(rawMin - pad);
+    const maxTemp = Math.ceil(rawMax + pad);
     const tempRange = maxTemp - minTemp || 1;
 
+    const width = 500;
+    const height = 90;
+    const marginTop = 10;
+    const marginBottom = 10;
+    const usableHeight = height - marginTop - marginBottom;
+
+    const N = forecast.length;
+    const points = forecast.map((item, i) => {
+      const x = N > 1 ? (i / (N - 1)) * width : width / 2;
+      const norm = (item.temperature - minTemp) / tempRange;
+      const y = height - marginBottom - norm * usableHeight;
+      return { x, y, item };
+    });
+
+    let linePath = `M ${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i];
+      const p1 = points[i + 1];
+      const cp1x = p0.x + (p1.x - p0.x) / 3;
+      const cp1y = p0.y;
+      const cp2x = p0.x + 2 * (p1.x - p0.x) / 3;
+      const cp2y = p1.y;
+      linePath += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)}`;
+    }
+
+    const fillPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)},${height} L ${points[0].x.toFixed(1)},${height} Z`;
+
+    const step = Math.max(1, Math.floor(N / 4));
+    const timeLabels = points
+      .filter((_, idx) => idx % step === 0 || idx === N - 1)
+      .map((p) => {
+        const d = new Date(p.item.datetime);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      });
+
+    const hoverPoint = this._outdoorHoverIndex !== null && points[this._outdoorHoverIndex]
+      ? points[this._outdoorHoverIndex]
+      : null;
+
+    const displayTemp = hoverPoint ? hoverPoint.item.temperature : outdoor.temperature;
+    const displayHum = hoverPoint
+      ? (hoverPoint.item.humidity ?? outdoor.humidity)
+      : outdoor.humidity;
+
     return html`
-      <div class="outdoor-forecast-graph-container">
-        <div class="graph-header">
-          <ha-icon icon="mdi:chart-timeline-variant"></ha-icon>
-          <span>Temperature Forecast</span>
-          <span class="graph-range">${minTemp.toFixed(0)}°C – ${maxTemp.toFixed(0)}°C</span>
+      <div class="integrated-graph-card">
+        <div class="graph-floating-header">
+          <div class="graph-current-stats">
+            ${displayTemp !== null
+              ? html`
+                  <div class="weighty-stat">
+                    <ha-icon icon="mdi:thermometer" class="stat-icon temp"></ha-icon>
+                    <span class="weighty-value">${displayTemp.toFixed(1)}</span>
+                    <span class="weighty-unit">°C</span>
+                  </div>
+                `
+              : nothing}
+            ${displayHum !== null
+              ? html`
+                  <div class="weighty-stat">
+                    <ha-icon icon="mdi:water-percent" class="stat-icon hum"></ha-icon>
+                    <span class="weighty-value">${displayHum.toFixed(0)}</span>
+                    <span class="weighty-unit">%</span>
+                  </div>
+                `
+              : nothing}
+            ${hoverPoint
+              ? html`<span class="hover-time-tag">${new Date(hoverPoint.item.datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`
+              : nothing}
+          </div>
+          <div class="graph-range-pill">
+            <span>Forecast ${rawMin.toFixed(1)}° – ${rawMax.toFixed(1)}° (${hours}h)</span>
+          </div>
         </div>
 
-        <div class="forecast-bars-grid">
-          ${forecast.map((item) => {
-            const date = new Date(item.datetime);
-            const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const pct = Math.max(12, Math.min(100, ((item.temperature - minTemp) / tempRange) * 100));
+        <div class="graph-svg-wrapper">
+          <svg
+            viewBox="0 0 ${width} ${height}"
+            preserveAspectRatio="none"
+            class="forecast-svg-chart"
+            @mousemove=${(e: MouseEvent) => this._handleOutdoorMouseMove(e, points.length)}
+            @mouseleave=${() => this._handleOutdoorMouseLeave()}
+            @touchmove=${(e: TouchEvent) => {
+              if (e.touches.length > 0) {
+                const touch = e.touches[0];
+                this._handleOutdoorMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, points.length);
+              }
+            }}
+            @touchend=${() => this._handleOutdoorMouseLeave()}
+          >
+            <defs>
+              <linearGradient id="outdoorTempGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--primary-color, #2196f3)" stop-opacity="0.32" />
+                <stop offset="100%" stop-color="var(--primary-color, #2196f3)" stop-opacity="0.0" />
+              </linearGradient>
+            </defs>
+            <path d="${fillPath}" fill="url(#outdoorTempGradient)" />
+            <path
+              d="${linePath}"
+              fill="none"
+              stroke="var(--primary-color, #2196f3)"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+            ${points.map(
+              (p, idx) => html`
+                <circle
+                  cx="${p.x.toFixed(1)}"
+                  cy="${p.y.toFixed(1)}"
+                  r="${idx === this._outdoorHoverIndex ? '4.5' : '2.5'}"
+                  fill="var(--ha-card-background, var(--card-background-color, #1c1c1e))"
+                  stroke="var(--primary-color, #2196f3)"
+                  stroke-width="${idx === this._outdoorHoverIndex ? '2.5' : '1.8'}"
+                />
+              `,
+            )}
 
-            return html`
-              <div class="forecast-bar-col">
-                <span class="bar-temp-val">${item.temperature.toFixed(1)}°</span>
-                <div class="bar-track">
-                  <div class="bar-fill" style="height: ${pct}%;"></div>
-                </div>
-                <span class="bar-time-lbl">${timeStr}</span>
-              </div>
-            `;
-          })}
+            ${hoverPoint
+              ? html`
+                  <line
+                    x1="${hoverPoint.x.toFixed(1)}"
+                    y1="0"
+                    x2="${hoverPoint.x.toFixed(1)}"
+                    y2="${height}"
+                    class="hover-crosshair"
+                  />
+                `
+              : nothing}
+          </svg>
+        </div>
+
+        <div class="graph-time-axis">
+          ${timeLabels.map((lbl) => html`<span>${lbl}</span>`)}
         </div>
       </div>
     `;
@@ -447,13 +594,31 @@ export class VentilationCard extends LitElement {
                     title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
                   >
                     <ha-icon icon="mdi:thermometer"></ha-icon>
-                    <span>${advice.indoor.temperature.toFixed(1)}°C${advice.indoor.humidity !== null ? ` · ${advice.indoor.humidity.toFixed(0)}%` : ''}</span>
+                    <span>${advice.indoor.temperature.toFixed(1)}°C</span>
+                    ${advice.indoor.humidity !== null
+                      ? html`
+                          <ha-icon icon="mdi:water-percent" class="pill-humidity-icon"></ha-icon>
+                          <span>${advice.indoor.humidity.toFixed(0)}%</span>
+                        `
+                      : nothing}
                   </div>
                 `
               : nothing}
 
             ${advice.windowState !== null
               ? this._renderWindowBadge(advice, room)
+              : nothing}
+
+            ${this.config.show_next_state_change !== false && advice.nextStateChange
+              ? html`
+                  <div
+                    class="next-state-chip ${advice.nextStateChange.targetState === 'open' ? 'to-open' : 'to-closed'}"
+                    title="Time to next state change (${advice.nextStateChange.targetState})"
+                  >
+                    <ha-icon icon="${advice.nextStateChange.targetState === 'open' ? 'mdi:window-open-variant' : 'mdi:window-closed-variant'}"></ha-icon>
+                    <span>${advice.nextStateChange.targetState === 'open' ? localize('forecast.next_state_open', { time: advice.nextStateChange.formattedTime }) : localize('forecast.next_state_closed', { time: advice.nextStateChange.formattedTime })}</span>
+                  </div>
+                `
               : nothing}
 
             <div class="suggestion-badge status-${advice.status}">
@@ -476,7 +641,7 @@ export class VentilationCard extends LitElement {
           : nothing}
 
         ${isExpanded
-          ? this._renderExpandedRoomDetails(advice, room)
+          ? this._renderExpandedRoomDetails(advice, room, roomIdx)
           : nothing}
       </div>
     `;
@@ -535,7 +700,7 @@ export class VentilationCard extends LitElement {
     `;
   }
 
-  private _renderExpandedRoomDetails(advice: RoomAdvice, room?: RoomConfig): TemplateResult {
+  private _renderExpandedRoomDetails(advice: RoomAdvice, room?: RoomConfig, roomIdx?: number): TemplateResult {
     const showAbsHum = this.config.show_absolute_humidity !== false;
 
     const tempEntity = room?.temperature;
@@ -544,103 +709,292 @@ export class VentilationCard extends LitElement {
     const customOutdoorHum = room?.outdoor_humidity_override;
     const customOutdoorMain = customOutdoorTemp || customOutdoorHum;
 
+    const effectiveForecast = this._getEffectiveForecast();
+    const predictionSeries = predictRoomTemperatureSeries(
+      advice.indoor.temperature,
+      effectiveForecast,
+      advice.forecastWindow,
+      {
+        insulationFactor: this.config.insulation_factor,
+        ventilationSpeed: this.config.ventilation_speed,
+        maxHours: this.config.forecast_hours ?? 24,
+      },
+    );
+
     return html`
       <div class="room-expanded-panel" @click=${(e: Event) => e.stopPropagation()}>
-        ${advice.reason
-          ? html`
-              <div class="expanded-reason-box">
-                <ha-icon icon="mdi:information-outline"></ha-icon>
-                <span>${advice.reason}</span>
-              </div>
-            `
-          : nothing}
+        <div class="integrated-graph-card">
+          <div class="graph-floating-header">
+            <div class="graph-current-stats">
+              ${advice.indoor.temperature !== null
+                ? html`
+                    <div
+                      class="weighty-stat ${tempEntity ? 'clickable' : ''}"
+                      @click=${(e: Event) => {
+                        if (tempEntity) {
+                          e.stopPropagation();
+                          this._handleMoreInfo(tempEntity);
+                        }
+                      }}
+                      title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
+                    >
+                      <ha-icon icon="mdi:thermometer" class="stat-icon temp"></ha-icon>
+                      <span class="weighty-value">${advice.indoor.temperature.toFixed(1)}</span>
+                      <span class="weighty-unit">°C</span>
+                    </div>
+                  `
+                : nothing}
+              ${advice.indoor.humidity !== null
+                ? html`
+                    <div
+                      class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
+                      @click=${(e: Event) => {
+                        if (humidityEntity) {
+                          e.stopPropagation();
+                          this._handleMoreInfo(humidityEntity);
+                        }
+                      }}
+                      title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
+                    >
+                      <ha-icon icon="mdi:water-percent" class="stat-icon hum"></ha-icon>
+                      <span class="weighty-value">${advice.indoor.humidity.toFixed(0)}</span>
+                      <span class="weighty-unit">%</span>
+                    </div>
+                  `
+                : nothing}
+              ${showAbsHum && advice.indoor.absoluteHumidity !== null
+                ? html`
+                    <div
+                      class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
+                      @click=${(e: Event) => {
+                        if (humidityEntity) {
+                          e.stopPropagation();
+                          this._handleMoreInfo(humidityEntity);
+                        }
+                      }}
+                      title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
+                    >
+                      <ha-icon icon="mdi:water" class="stat-icon abs-hum"></ha-icon>
+                      <span class="weighty-value">${advice.indoor.absoluteHumidity.toFixed(1)}</span>
+                      <span class="weighty-unit">g/m³</span>
+                    </div>
+                  `
+                : nothing}
+            </div>
 
-        <div class="room-values">
-          ${advice.indoor.temperature !== null
+            ${advice.hasCustomOutdoor
+              ? html`
+                  <div
+                    class="graph-range-pill ${customOutdoorMain ? 'clickable' : ''}"
+                    @click=${(e: Event) => {
+                      if (customOutdoorMain) {
+                        e.stopPropagation();
+                        this._handleMoreInfo(customOutdoorMain);
+                      }
+                    }}
+                    title="${customOutdoorMain ? `View details for ${customOutdoorMain}` : ''}"
+                  >
+                    <span>Outdoor: ${advice.outdoor.temperature?.toFixed(1)}°C · ${advice.outdoor.humidity?.toFixed(0)}%</span>
+                  </div>
+                `
+              : nothing}
+          </div>
+
+          ${advice.reason
             ? html`
-                <span
-                  class="sensor-value ${tempEntity ? 'clickable' : ''}"
-                  @click=${(e: Event) => {
-                    if (tempEntity) {
-                      e.stopPropagation();
-                      this._handleMoreInfo(tempEntity);
-                    }
-                  }}
-                  title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
-                >
-                  <ha-icon icon="mdi:thermometer"></ha-icon>
-                  <span class="value">${advice.indoor.temperature.toFixed(1)}</span>
-                  <span class="unit">°C</span>
-                </span>
+                <div class="expanded-reason-box">
+                  <ha-icon icon="mdi:information-outline"></ha-icon>
+                  <span>${advice.reason}</span>
+                </div>
               `
             : nothing}
-          ${advice.indoor.humidity !== null
-            ? html`
-                <span
-                  class="sensor-value ${humidityEntity ? 'clickable' : ''}"
-                  @click=${(e: Event) => {
-                    if (humidityEntity) {
-                      e.stopPropagation();
-                      this._handleMoreInfo(humidityEntity);
-                    }
-                  }}
-                  title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                >
-                  <ha-icon icon="mdi:water-percent"></ha-icon>
-                  <span class="value">${advice.indoor.humidity.toFixed(0)}</span>
-                  <span class="unit">%</span>
-                </span>
-              `
+
+          ${predictionSeries.length > 0
+            ? this._renderRoomPredictionGraph(predictionSeries, roomIdx ?? 0)
             : nothing}
-          ${showAbsHum && advice.indoor.absoluteHumidity !== null
-            ? html`
-                <span
-                  class="sensor-value ${humidityEntity ? 'clickable' : ''}"
-                  @click=${(e: Event) => {
-                    if (humidityEntity) {
-                      e.stopPropagation();
-                      this._handleMoreInfo(humidityEntity);
-                    }
-                  }}
-                  title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                >
-                  <ha-icon icon="mdi:water"></ha-icon>
-                  <span class="value">${advice.indoor.absoluteHumidity.toFixed(1)}</span>
-                  <span class="unit">g/m³</span>
-                </span>
-              `
+
+          ${advice.forecastWindow
+            ? this._renderUpcomingWindows(advice.forecastWindow)
+            : nothing}
+        </div>
+      </div>
+    `;
+  }
+
+  private _renderRoomPredictionGraph(
+    series: PredictionPoint[],
+    roomIdx: number,
+  ): TemplateResult {
+    if (!series || series.length === 0) return html``;
+
+    const hoverIdx = this._roomHoverIndices[roomIdx] ?? null;
+    const hoveredPoint = hoverIdx !== null && series[hoverIdx] ? series[hoverIdx] : null;
+
+    const roomTemps = series.map((s) => s.predictedRoomTemp);
+    const outdoorTemps = series.map((s) => s.outdoorTemp);
+    const allTemps = [...roomTemps, ...outdoorTemps];
+    const rawMin = Math.min(...allTemps);
+    const rawMax = Math.max(...allTemps);
+    const pad = Math.max(1, (rawMax - rawMin) * 0.15);
+    const minTemp = Math.floor(rawMin - pad);
+    const maxTemp = Math.ceil(rawMax + pad);
+    const tempRange = maxTemp - minTemp || 1;
+
+    const width = 500;
+    const height = 95;
+    const marginTop = 10;
+    const marginBottom = 10;
+    const usableHeight = height - marginTop - marginBottom;
+
+    const N = series.length;
+    const points = series.map((item, i) => {
+      const x = N > 1 ? (i / (N - 1)) * width : width / 2;
+      const roomNorm = (item.predictedRoomTemp - minTemp) / tempRange;
+      const roomY = height - marginBottom - roomNorm * usableHeight;
+      const outdoorNorm = (item.outdoorTemp - minTemp) / tempRange;
+      const outdoorY = height - marginBottom - outdoorNorm * usableHeight;
+      return { x, roomY, outdoorY, item };
+    });
+
+    let roomPath = `M ${points[0].x.toFixed(1)},${points[0].roomY.toFixed(1)}`;
+    let outdoorPath = `M ${points[0].x.toFixed(1)},${points[0].outdoorY.toFixed(1)}`;
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const p0 = points[i];
+      const p1 = points[i + 1];
+
+      const cp1x = p0.x + (p1.x - p0.x) / 3;
+      const cp2x = p0.x + 2 * (p1.x - p0.x) / 3;
+
+      roomPath += ` C ${cp1x.toFixed(1)},${p0.roomY.toFixed(1)} ${cp2x.toFixed(1)},${p1.roomY.toFixed(1)} ${p1.x.toFixed(1)},${p1.roomY.toFixed(1)}`;
+      outdoorPath += ` C ${cp1x.toFixed(1)},${p0.outdoorY.toFixed(1)} ${cp2x.toFixed(1)},${p1.outdoorY.toFixed(1)} ${p1.x.toFixed(1)},${p1.outdoorY.toFixed(1)}`;
+    }
+
+    const openBands: Array<{ startX: number; endX: number }> = [];
+    let bandStart: number | null = null;
+
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i];
+      if (p.item.canVentilate) {
+        if (bandStart === null) bandStart = p.x;
+        if (i === points.length - 1 && bandStart !== null) {
+          openBands.push({ startX: bandStart, endX: p.x });
+        }
+      } else {
+        if (bandStart !== null) {
+          openBands.push({ startX: bandStart, endX: p.x });
+          bandStart = null;
+        }
+      }
+    }
+
+    const step = Math.max(1, Math.floor(N / 4));
+    const timeLabels = points
+      .filter((_, idx) => idx % step === 0 || idx === N - 1)
+      .map((p) => {
+        const d = new Date(p.item.datetime);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      });
+
+    const activePoint = hoveredPoint ? points[hoverIdx!] : null;
+
+    return html`
+      <div class="prediction-graph-card">
+        <div class="prediction-legend">
+          <div class="legend-item">
+            <span class="legend-color predicted-room"></span>
+            <span>Room (Pred): ${hoveredPoint ? `${hoveredPoint.predictedRoomTemp.toFixed(1)}°C` : `${roomTemps[0]?.toFixed(1)}°C`}</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-color outdoor-reference"></span>
+            <span>Outdoor: ${hoveredPoint ? `${hoveredPoint.outdoorTemp.toFixed(1)}°C` : `${outdoorTemps[0]?.toFixed(1)}°C`}</span>
+          </div>
+          <div class="legend-item">
+            <span class="legend-color openable-zone"></span>
+            <span>Open Zone</span>
+          </div>
+          ${hoveredPoint
+            ? html`<span class="hover-time-tag">${new Date(hoveredPoint.datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`
             : nothing}
         </div>
 
-        ${advice.hasCustomOutdoor
-          ? html`
-              <div
-                class="room-outdoor ${customOutdoorMain ? 'clickable' : ''}"
-                @click=${(e: Event) => {
-                  if (customOutdoorMain) {
-                    e.stopPropagation();
-                    this._handleMoreInfo(customOutdoorMain);
-                  }
-                }}
-                title="${customOutdoorMain ? `View details for ${customOutdoorMain}` : ''}"
-              >
-                <ha-icon icon="mdi:home-export-outline"></ha-icon>
-                ${advice.outdoor.temperature !== null
-                  ? html`${advice.outdoor.temperature.toFixed(1)}°C`
-                  : ''}
-                ${advice.outdoor.humidity !== null
-                  ? html`· ${advice.outdoor.humidity.toFixed(0)}%`
-                  : ''}
-                ${showAbsHum && advice.outdoor.absoluteHumidity !== null
-                  ? html`· ${advice.outdoor.absoluteHumidity.toFixed(1)} g/m³`
-                  : ''}
-              </div>
-            `
-          : nothing}
+        <div class="graph-svg-wrapper">
+          <svg
+            viewBox="0 0 ${width} ${height}"
+            preserveAspectRatio="none"
+            class="prediction-svg-chart"
+            @mousemove=${(e: MouseEvent) => this._handleRoomMouseMove(e, roomIdx, points.length)}
+            @mouseleave=${() => this._handleRoomMouseLeave(roomIdx)}
+            @touchmove=${(e: TouchEvent) => {
+              if (e.touches.length > 0) {
+                const touch = e.touches[0];
+                this._handleRoomMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, roomIdx, points.length);
+              }
+            }}
+            @touchend=${() => this._handleRoomMouseLeave(roomIdx)}
+          >
+            ${openBands.map(
+              (b) => html`
+                <rect
+                  x="${b.startX.toFixed(1)}"
+                  y="0"
+                  width="${Math.max(4, b.endX - b.startX).toFixed(1)}"
+                  height="${height}"
+                  class="openable-zone-band"
+                  rx="3"
+                />
+              `,
+            )}
 
-        ${advice.forecastWindow
-          ? this._renderUpcomingWindows(advice.forecastWindow)
-          : nothing}
+            <path
+              d="${outdoorPath}"
+              fill="none"
+              stroke="var(--primary-color, #2196f3)"
+              stroke-width="1.8"
+              stroke-dasharray="4 3"
+              opacity="0.7"
+            />
+
+            <path
+              d="${roomPath}"
+              fill="none"
+              stroke="var(--vc-green, #10b981)"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+
+            ${activePoint
+              ? html`
+                  <line
+                    x1="${activePoint.x.toFixed(1)}"
+                    y1="0"
+                    x2="${activePoint.x.toFixed(1)}"
+                    y2="${height}"
+                    class="hover-crosshair"
+                  />
+                  <circle
+                    cx="${activePoint.x.toFixed(1)}"
+                    cy="${activePoint.roomY.toFixed(1)}"
+                    r="4"
+                    class="hover-marker"
+                    stroke="var(--vc-green, #10b981)"
+                  />
+                  <circle
+                    cx="${activePoint.x.toFixed(1)}"
+                    cy="${activePoint.outdoorY.toFixed(1)}"
+                    r="3.5"
+                    class="hover-marker"
+                    stroke="var(--primary-color, #2196f3)"
+                  />
+                `
+              : nothing}
+          </svg>
+        </div>
+
+        <div class="graph-time-axis">
+          ${timeLabels.map((lbl) => html`<span>${lbl}</span>`)}
+        </div>
       </div>
     `;
   }

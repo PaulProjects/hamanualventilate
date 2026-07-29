@@ -28,6 +28,10 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
       show_absolute_humidity: config.show_absolute_humidity ?? true,
       show_forecast: config.show_forecast ?? true,
       show_inline_forecast: config.show_inline_forecast ?? false,
+      forecast_hours: config.forecast_hours ?? 24,
+      show_next_state_change: config.show_next_state_change ?? true,
+      insulation_factor: config.insulation_factor ?? 0.05,
+      ventilation_speed: config.ventilation_speed ?? 0.35,
     };
     this.requestUpdate();
   }
@@ -89,6 +93,11 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
         'visuals',
         localize('editor.visuals'),
         this._renderVisualsSection(),
+      )}
+      ${this._renderSection(
+        'prediction',
+        localize('editor.prediction'),
+        this._renderPredictionSection(),
       )}
       ${this._renderSection(
         'thresholds',
@@ -160,6 +169,48 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
         .value=${this._config?.show_forecast ?? true}
         label="${localize('editor.show_forecast')}"
         .configValue=${'show_forecast'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ boolean: {} }}
+        .value=${this._config?.show_next_state_change ?? true}
+        label="${localize('editor.show_next_state_change')}"
+        .configValue=${'show_next_state_change'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ number: { min: 6, max: 48, step: 6, mode: 'slider', unit_of_measurement: 'h' } }}
+        .value=${this._config?.forecast_hours ?? 24}
+        label="${localize('editor.forecast_hours')}"
+        .configValue=${'forecast_hours'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+    `;
+  }
+
+  /* ── Prediction section ───────────────────────────────────── */
+
+  private _renderPredictionSection(): TemplateResult {
+    return html`
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ number: { min: 0.01, max: 0.20, step: 0.01, mode: 'box' } }}
+        .value=${this._config?.insulation_factor ?? 0.05}
+        label="${localize('editor.insulation_factor')}"
+        .configValue=${'insulation_factor'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ number: { min: 0.10, max: 0.80, step: 0.05, mode: 'box' } }}
+        .value=${this._config?.ventilation_speed ?? 0.35}
+        label="${localize('editor.ventilation_speed')}"
+        .configValue=${'ventilation_speed'}
         @value-changed=${this._selectorChanged}
       ></ha-selector>
     `;

@@ -46,6 +46,11 @@ export interface VentilationCardConfig extends LovelaceCardConfig {
   show_absolute_humidity?: boolean;  // display absolute humidity g/m³ (default: true)
   show_forecast?: boolean;           // display forecast window predictions (default: true)
   show_inline_forecast?: boolean;    // display full forecast expanded inline instead of modal (default: false)
+  forecast_hours?: number;           // hours of forecast to display (default: 24)
+  show_next_state_change?: boolean;  // show time to next open/closed state change (default: true)
+  // Thermal prediction settings
+  insulation_factor?: number;        // room thermal insulation coefficient (default: 0.05)
+  ventilation_speed?: number;        // air exchange speed when windows open (default: 0.35)
 }
 
 /* ── System Diagnostics & Health Issues ───────────────────────── */
@@ -72,6 +77,13 @@ export interface SensorReadings {
   absoluteHumidity: number | null;
 }
 
+export interface NextStateChange {
+  targetState: 'open' | 'closed';
+  timeRemainingMs: number;
+  formattedTime: string; // e.g. "3h" or "45m"
+  targetTime: Date;
+}
+
 export interface RoomAdvice {
   roomName: string;
   roomIcon: string;
@@ -83,6 +95,7 @@ export interface RoomAdvice {
   forecastWindow: ForecastWindow | null;
   windowState: 'open' | 'closed' | null;
   windowCorrect: boolean | null;   // null = no sensor
+  nextStateChange?: NextStateChange | null;
 }
 
 /* ── Forecast types ───────────────────────────────────────────── */
@@ -109,3 +122,12 @@ export interface ForecastWindow {
   timeline: Array<{ hour: number; label: string; canVentilate: boolean }>;
   upcomingWindows: VentilationWindowRange[];
 }
+
+export interface PredictionPoint {
+  datetime: string;
+  date: Date;
+  predictedRoomTemp: number;
+  outdoorTemp: number;
+  canVentilate: boolean;
+}
+
