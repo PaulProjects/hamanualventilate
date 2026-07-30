@@ -233,6 +233,7 @@ export const cardStyles = css`
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    cursor: pointer;
   }
 
   .outdoor-title-group {

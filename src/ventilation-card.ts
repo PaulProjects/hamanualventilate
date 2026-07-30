@@ -9,7 +9,6 @@ import { cardStyles } from './styles';
 import { localize } from './localize/localize';
 import { getVentilationAdvice, getSensorReadings, readSensor } from './utils/ventilation-logic';
 import { subscribeForecast, extractForecastItems } from './utils/forecast';
-import { predictRoomTemperatureSeries } from './utils/thermal-prediction';
 
 /* ── Console banner ─────────────────────────────────────────── */
 console.info(
@@ -177,6 +176,9 @@ export class VentilationCard extends LitElement {
           this.config.max_humidity,
           effectiveForecast,
           this.config.weather_entity,
+          this.config.insulation_factor,
+          this.config.ventilation_speed,
+          this.config.forecast_hours,
         ),
       );
 
@@ -320,12 +322,10 @@ export class VentilationCard extends LitElement {
     }
 
     return html`
-      <div class="outdoor-section">
+      <div class="outdoor-section ${this._expandedOutdoor ? 'is-expanded' : ''}">
         <div
           class="outdoor-header"
-          @click=${() => {
-            this._expandedOutdoor = !this._expandedOutdoor;
-          }}
+          @click=${(e: Event) => this._toggleOutdoorExpand(e)}
           title="${this._expandedOutdoor ? 'Collapse outdoor details' : 'Expand outdoor details & forecast'}"
         >
           <div class="outdoor-title-group">
@@ -380,6 +380,7 @@ export class VentilationCard extends LitElement {
 
             <div
               class="outdoor-details-trigger ${this._expandedOutdoor ? 'expanded' : ''}"
+              @click=${(e: Event) => this._toggleOutdoorExpand(e)}
               title="${this._expandedOutdoor ? 'Collapse outdoor details' : 'Expand outdoor details & forecast'}"
             >
               <ha-icon icon="${this._expandedOutdoor ? 'mdi:chevron-up' : 'mdi:chevron-down'}"></ha-icon>
@@ -647,6 +648,14 @@ export class VentilationCard extends LitElement {
     `;
   }
 
+  private _toggleOutdoorExpand(e?: Event): void {
+    if (e) {
+      e.stopPropagation();
+    }
+    this._expandedOutdoor = !this._expandedOutdoor;
+    this.requestUpdate();
+  }
+
   private _toggleRoomExpand(roomIndex: number, e?: Event): void {
     if (e) {
       e.stopPropagation();
@@ -709,17 +718,7 @@ export class VentilationCard extends LitElement {
     const customOutdoorHum = room?.outdoor_humidity_override;
     const customOutdoorMain = customOutdoorTemp || customOutdoorHum;
 
-    const effectiveForecast = this._getEffectiveForecast();
-    const predictionSeries = predictRoomTemperatureSeries(
-      advice.indoor.temperature,
-      effectiveForecast,
-      advice.forecastWindow,
-      {
-        insulationFactor: this.config.insulation_factor,
-        ventilationSpeed: this.config.ventilation_speed,
-        maxHours: this.config.forecast_hours ?? 24,
-      },
-    );
+    const predictionSeries = advice.predictionSeries || [];
 
     return html`
       <div class="room-expanded-panel" @click=${(e: Event) => e.stopPropagation()}>

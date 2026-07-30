@@ -200,94 +200,8 @@ export function formatWindowDate(d: Date, now: Date): string {
   return `${dayName} ${hoursStr}`;
 }
 
-export function computeUpcomingWindows(
-  forecast: ForecastEntry[],
-  indoorReadings: SensorReadings,
-  goal: VentilationGoal,
-  ahThreshold: number = DEFAULT_AH_THRESHOLD,
-  balancedMaxTemp: number = DEFAULT_BALANCED_MAX_TEMP,
-  minHumidity: number = DEFAULT_MIN_HUMIDITY,
-  maxHumidity: number = DEFAULT_MAX_HUMIDITY,
-  limit: number = 3,
-): VentilationWindowRange[] {
-  if (!forecast || forecast.length === 0 || indoorReadings.temperature === null) {
-    return [];
-  }
 
-  const now = new Date();
-  const validEntries = forecast
-    .map((e) => ({
-      ...e,
-      parsedDate: new Date(e.datetime),
-    }))
-    .filter((e) => !isNaN(e.parsedDate.getTime()) && !isNaN(e.temperature))
-    .sort((a, b) => a.parsedDate.getTime() - b.parsedDate.getTime());
-
-  if (validEntries.length === 0) return [];
-
-  const evaluated = validEntries.map((entry) => {
-    const forecastOutdoor: SensorReadings = {
-      temperature: entry.temperature,
-      humidity: entry.humidity ?? null,
-      absoluteHumidity:
-        entry.humidity != null && !isNaN(entry.humidity)
-          ? calculateAbsoluteHumidity(entry.temperature, entry.humidity)
-          : null,
-    };
-
-    const canVentilate = evaluateForecastEntry(
-      indoorReadings,
-      forecastOutdoor,
-      goal,
-      ahThreshold,
-      balancedMaxTemp,
-      minHumidity,
-      maxHumidity,
-    );
-
-    return {
-      date: entry.parsedDate,
-      canVentilate,
-    };
-  });
-
-  const windows: VentilationWindowRange[] = [];
-  let currentStart: Date | null = null;
-  let currentIsActive = false;
-
-  for (let i = 0; i < evaluated.length; i++) {
-    const item = evaluated[i];
-    const isLast = i === evaluated.length - 1;
-
-    if (item.canVentilate) {
-      if (currentStart === null) {
-        currentStart = item.date;
-        if (item.date <= now) {
-          currentIsActive = true;
-        }
-      }
-
-      if (isLast) {
-        const stepMs = i > 0 ? item.date.getTime() - evaluated[i - 1].date.getTime() : 3600000;
-        const end = new Date(item.date.getTime() + Math.max(3600000, stepMs));
-        windows.push(buildWindowRange(currentStart, end, currentIsActive, now));
-      }
-    } else {
-      if (currentStart !== null) {
-        const end = item.date;
-        windows.push(buildWindowRange(currentStart, end, currentIsActive, now));
-        currentStart = null;
-        currentIsActive = false;
-      }
-    }
-
-    if (windows.length >= limit) break;
-  }
-
-  return windows;
-}
-
-function buildWindowRange(start: Date, end: Date, isCurrent: boolean, now: Date): VentilationWindowRange {
+export function buildWindowRange(start: Date, end: Date, isCurrent: boolean, now: Date): VentilationWindowRange {
   const durationMs = end.getTime() - start.getTime();
   const durationHours = Math.max(1, Math.round(durationMs / (3600 * 1000)));
 
@@ -298,6 +212,96 @@ function buildWindowRange(start: Date, end: Date, isCurrent: boolean, now: Date)
     formattedStart: formatWindowDate(start, now),
     formattedEnd: formatWindowDate(end, now),
     durationHours,
+  };
+}
+
+export function computeForecastWindowFromPrediction(
+  series: Array<{ datetime: string; date: Date; predictedRoomTemp: number; outdoorTemp: number; canVentilate: boolean }>,
+  limit: number = 3,
+): ForecastWindow {
+  if (!series || series.length === 0) {
+    return {
+      canVentilateNow: false,
+      ventilateFrom: null,
+      ventilateUntil: null,
+      timeline: [],
+      upcomingWindows: [],
+    };
+  }
+
+  const now = new Date();
+  const timeline: ForecastWindow['timeline'] = [];
+  let ventilateFrom: string | null = null;
+  let ventilateUntil: string | null = null;
+  let foundFirstCanVentilate = false;
+  let isCurrentlyVentilating = false;
+
+  const isDaily =
+    series.length >= 2 &&
+    series[1].date.getTime() - series[0].date.getTime() >= 12 * 3600 * 1000;
+
+  for (let i = 0; i < series.length; i++) {
+    const point = series[i];
+    const hour = point.date.getHours();
+    const label = isDaily
+      ? point.date.toLocaleDateString(undefined, { weekday: 'short' })
+      : `${hour.toString().padStart(2, '0')}:00`;
+
+    timeline.push({ hour, label, canVentilate: point.canVentilate });
+
+    if (point.canVentilate && !foundFirstCanVentilate) {
+      foundFirstCanVentilate = true;
+      if (point.date <= now || i === 0) {
+        isCurrentlyVentilating = true;
+      } else {
+        ventilateFrom = label;
+      }
+    }
+
+    if (!point.canVentilate && foundFirstCanVentilate && ventilateUntil === null) {
+      ventilateUntil = label;
+    }
+  }
+
+  const upcomingWindows: VentilationWindowRange[] = [];
+  let currentStart: Date | null = null;
+  let currentIsActive = false;
+
+  for (let i = 0; i < series.length; i++) {
+    const item = series[i];
+    const isLast = i === series.length - 1;
+
+    if (item.canVentilate) {
+      if (currentStart === null) {
+        currentStart = item.date;
+        if (i === 0 || item.date <= now) {
+          currentIsActive = true;
+        }
+      }
+
+      if (isLast) {
+        const stepMs = i > 0 ? item.date.getTime() - series[i - 1].date.getTime() : 3600000;
+        const end = new Date(item.date.getTime() + Math.max(3600000, stepMs));
+        upcomingWindows.push(buildWindowRange(currentStart, end, currentIsActive, now));
+      }
+    } else {
+      if (currentStart !== null) {
+        const end = item.date;
+        upcomingWindows.push(buildWindowRange(currentStart, end, currentIsActive, now));
+        currentStart = null;
+        currentIsActive = false;
+      }
+    }
+
+    if (upcomingWindows.length >= limit) break;
+  }
+
+  return {
+    canVentilateNow: series[0]?.canVentilate ?? false,
+    ventilateFrom: series[0]?.canVentilate ? null : ventilateFrom,
+    ventilateUntil,
+    timeline,
+    upcomingWindows,
   };
 }
 
@@ -331,7 +335,6 @@ export function computeForecastWindow(
   let foundFirstCanVentilate = false;
   let isCurrentlyVentilating = false;
 
-  // Filter out entries with invalid date or temp
   const validEntries = forecast
     .map((e) => ({
       ...e,
@@ -349,12 +352,10 @@ export function computeForecastWindow(
     };
   }
 
-  // Detect if entries are daily (interval >= 12h)
   const isDaily =
     validEntries.length >= 2 &&
     validEntries[1].parsedDate.getTime() - validEntries[0].parsedDate.getTime() >= 12 * 3600 * 1000;
 
-  // Evaluate up to 24 entries
   const entries = validEntries.slice(0, 24);
 
   for (const entry of entries) {
@@ -364,18 +365,12 @@ export function computeForecastWindow(
       ? entryDate.toLocaleDateString(undefined, { weekday: 'short' })
       : `${hour.toString().padStart(2, '0')}:00`;
 
-    const forecastOutdoor: SensorReadings = {
-      temperature: entry.temperature,
-      humidity: entry.humidity ?? null,
-      absoluteHumidity:
-        entry.humidity != null && !isNaN(entry.humidity)
-          ? calculateAbsoluteHumidity(entry.temperature, entry.humidity)
-          : null,
-    };
-
-    const canVentilate = evaluateForecastEntry(
-      indoorReadings,
-      forecastOutdoor,
+    const canVentilate = evaluateForecastPoint(
+      indoorReadings.temperature,
+      indoorReadings.humidity,
+      indoorReadings.absoluteHumidity,
+      entry.temperature,
+      entry.humidity ?? null,
       goal,
       ahThreshold,
       balancedMaxTemp,
@@ -418,53 +413,146 @@ export function computeForecastWindow(
   };
 }
 
+export function computeUpcomingWindows(
+  forecast: ForecastEntry[],
+  indoorReadings: SensorReadings,
+  goal: VentilationGoal,
+  ahThreshold: number = DEFAULT_AH_THRESHOLD,
+  balancedMaxTemp: number = DEFAULT_BALANCED_MAX_TEMP,
+  minHumidity: number = DEFAULT_MIN_HUMIDITY,
+  maxHumidity: number = DEFAULT_MAX_HUMIDITY,
+  limit: number = 3,
+): VentilationWindowRange[] {
+  if (!forecast || forecast.length === 0 || indoorReadings.temperature === null) {
+    return [];
+  }
+
+  const now = new Date();
+  const validEntries = forecast
+    .map((e) => ({
+      ...e,
+      parsedDate: new Date(e.datetime),
+    }))
+    .filter((e) => !isNaN(e.parsedDate.getTime()) && !isNaN(e.temperature))
+    .sort((a, b) => a.parsedDate.getTime() - b.parsedDate.getTime());
+
+  if (validEntries.length === 0) return [];
+
+  const evaluated = validEntries.map((entry) => {
+    const canVentilate = evaluateForecastPoint(
+      indoorReadings.temperature,
+      indoorReadings.humidity,
+      indoorReadings.absoluteHumidity,
+      entry.temperature,
+      entry.humidity ?? null,
+      goal,
+      ahThreshold,
+      balancedMaxTemp,
+      minHumidity,
+      maxHumidity,
+    );
+
+    return {
+      date: entry.parsedDate,
+      canVentilate,
+    };
+  });
+
+  const windows: VentilationWindowRange[] = [];
+  let currentStart: Date | null = null;
+  let currentIsActive = false;
+
+  for (let i = 0; i < evaluated.length; i++) {
+    const item = evaluated[i];
+    const isLast = i === evaluated.length - 1;
+
+    if (item.canVentilate) {
+      if (currentStart === null) {
+        currentStart = item.date;
+        if (i === 0 || item.date <= now) {
+          currentIsActive = true;
+        }
+      }
+
+      if (isLast) {
+        const stepMs = i > 0 ? item.date.getTime() - evaluated[i - 1].date.getTime() : 3600000;
+        const end = new Date(item.date.getTime() + Math.max(3600000, stepMs));
+        windows.push(buildWindowRange(currentStart, end, currentIsActive, now));
+      }
+    } else {
+      if (currentStart !== null) {
+        const end = item.date;
+        windows.push(buildWindowRange(currentStart, end, currentIsActive, now));
+        currentStart = null;
+        currentIsActive = false;
+      }
+    }
+
+    if (windows.length >= limit) break;
+  }
+
+  return windows;
+}
+
 /* ── Single forecast entry evaluation ───────────────────────────── */
 
-function evaluateForecastEntry(
-  indoor: SensorReadings,
-  forecastOutdoor: SensorReadings,
+export function evaluateForecastPoint(
+  indoorTemp: number | null,
+  indoorHum: number | null,
+  indoorAbsHum: number | null,
+  outdoorTemp: number | null,
+  outdoorHum: number | null,
   goal: VentilationGoal,
-  ahThreshold: number,
-  balancedMaxTemp: number,
-  minHumidity: number,
-  maxHumidity: number,
+  ahThreshold: number = DEFAULT_AH_THRESHOLD,
+  balancedMaxTemp: number = DEFAULT_BALANCED_MAX_TEMP,
+  minHumidity: number = DEFAULT_MIN_HUMIDITY,
+  maxHumidity: number = DEFAULT_MAX_HUMIDITY,
 ): boolean {
-  if (indoor.temperature === null || forecastOutdoor.temperature === null) return false;
+  if (indoorTemp === null || outdoorTemp === null) return false;
+
+  const outdoorAbsHum =
+    outdoorHum !== null && !isNaN(outdoorHum)
+      ? calculateAbsoluteHumidity(outdoorTemp, outdoorHum)
+      : null;
 
   const ahDelta =
-    indoor.absoluteHumidity !== null && forecastOutdoor.absoluteHumidity !== null
-      ? indoor.absoluteHumidity - forecastOutdoor.absoluteHumidity
+    indoorAbsHum !== null && outdoorAbsHum !== null
+      ? indoorAbsHum - outdoorAbsHum
       : null;
 
   switch (goal) {
     case 'cooling':
-      return forecastOutdoor.temperature < indoor.temperature;
+      return outdoorTemp <= indoorTemp + 0.1;
 
     case 'warming': {
-      if (forecastOutdoor.temperature >= indoor.temperature) return true;
+      if (outdoorTemp >= indoorTemp) return true;
       if (ahDelta !== null && ahDelta > ahThreshold) return true;
       return false;
     }
 
     case 'humidity': {
       if (ahDelta === null || ahDelta <= 0) return false;
-      if (indoor.humidity !== null) {
-        return indoor.humidity > maxHumidity;
+      if (indoorHum !== null) {
+        return indoorHum > maxHumidity;
       }
       return ahDelta >= ahThreshold;
     }
 
     case 'balanced': {
       // Priority 1: Cooling down if indoor exceeds target max
-      if (indoor.temperature > balancedMaxTemp && forecastOutdoor.temperature < indoor.temperature) {
+      if (indoorTemp > balancedMaxTemp && outdoorTemp < indoorTemp) {
         return true;
       }
-      // Priority 2: Dehumidifying (if above max humidity or ahDelta >= threshold)
-      if (indoor.humidity !== null && indoor.humidity > maxHumidity && ahDelta !== null && ahDelta > 0) {
+      // Priority 2: Dehumidifying
+      if (indoorHum !== null && indoorHum > maxHumidity && ahDelta !== null && ahDelta > 0) {
+        return true;
+      }
+      // Priority 3: Air exchange when outdoor is cooler/equal
+      if (outdoorTemp <= indoorTemp + 0.1 && indoorTemp >= 16) {
         return true;
       }
       if (
-        (indoor.humidity === null || indoor.humidity >= minHumidity) &&
+        (indoorHum === null || indoorHum >= minHumidity) &&
         ahDelta !== null &&
         ahDelta >= ahThreshold
       ) {

@@ -93,6 +93,7 @@ export interface RoomAdvice {
   outdoor: SensorReadings;
   hasCustomOutdoor: boolean;
   forecastWindow: ForecastWindow | null;
+  predictionSeries: PredictionPoint[];
   windowState: 'open' | 'closed' | null;
   windowCorrect: boolean | null;   // null = no sensor
   nextStateChange?: NextStateChange | null;

@@ -1,14 +1,7 @@
-/**
- * Thermal Prediction Engine for Room Temperature.
- *
- * Predicts indoor room temperature trends over the forecast window based on:
- * - Current indoor temperature
- * - Outdoor temperature forecast
- * - Window open/close ventilation recommendations
- * - Building thermal insulation and air exchange dynamics
- */
-
-import type { ForecastEntry, ForecastWindow, PredictionPoint } from '../types';
+import type { ForecastEntry, PredictionPoint, SensorReadings, VentilationGoal } from '../types';
+import { evaluateForecastPoint } from './forecast';
+import { calculateAbsoluteHumidity } from './humidity';
+import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY } from '../const';
 
 export interface ThermalPredictionOptions {
   insulationFactor?: number; // k_closed: thermal loss coefficient when windows are closed (default: 0.05)
@@ -17,15 +10,20 @@ export interface ThermalPredictionOptions {
 }
 
 /**
- * Predict room temperature points over time using numerical differential stepping.
+ * Predict room temperature points over time using numerical differential stepping
+ * and dynamic window open evaluation at each point.
  */
 export function predictRoomTemperatureSeries(
-  initialRoomTemp: number | null,
+  indoor: SensorReadings,
   forecast: ForecastEntry[],
-  forecastWindow: ForecastWindow | null,
+  goal: VentilationGoal = 'cooling',
   options: ThermalPredictionOptions = {},
+  ahThreshold: number = DEFAULT_AH_THRESHOLD,
+  balancedMaxTemp: number = DEFAULT_BALANCED_MAX_TEMP,
+  minHumidity: number = DEFAULT_MIN_HUMIDITY,
+  maxHumidity: number = DEFAULT_MAX_HUMIDITY,
 ): PredictionPoint[] {
-  if (initialRoomTemp === null || !forecast || forecast.length === 0) {
+  if (indoor.temperature === null || !forecast || forecast.length === 0) {
     return [];
   }
 
@@ -38,6 +36,7 @@ export function predictRoomTemperatureSeries(
       datetime: e.datetime,
       date: new Date(e.datetime),
       temperature: e.temperature,
+      humidity: e.humidity ?? null,
     }))
     .filter((e) => !isNaN(e.date.getTime()) && !isNaN(e.temperature))
     .sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -49,36 +48,36 @@ export function predictRoomTemperatureSeries(
   const endTime = startTime + maxHours * 3600 * 1000;
   const horizonEntries = validEntries.filter((e) => e.date.getTime() <= endTime + 3600 * 1000);
 
-  // Map timeline canVentilate status by hour
-  const timelineMap = new Map<number, boolean>();
-  if (forecastWindow?.timeline) {
-    for (const t of forecastWindow.timeline) {
-      timelineMap.set(t.hour, t.canVentilate);
-    }
-  }
-
-  // Helper to check if window is open/ventilating at a given timestamp
-  const isVentilatingAt = (date: Date): boolean => {
-    if (forecastWindow?.upcomingWindows && forecastWindow.upcomingWindows.length > 0) {
-      return forecastWindow.upcomingWindows.some(
-        (win) => date >= win.start && date <= win.end,
-      );
-    }
-    const hr = date.getHours();
-    return timelineMap.get(hr) ?? false;
-  };
-
   const points: PredictionPoint[] = [];
-  let currentTemp = initialRoomTemp;
+  let currentTemp = indoor.temperature;
+  let currentHum = indoor.humidity;
 
   for (let i = 0; i < horizonEntries.length; i++) {
     const entry = horizonEntries[i];
     const prevEntry = i > 0 ? horizonEntries[i - 1] : null;
 
+    const currentAbsHum =
+      currentTemp !== null && currentHum !== null
+        ? calculateAbsoluteHumidity(currentTemp, currentHum)
+        : null;
+
+    // Evaluate window opening at this timestep based on predicted indoor climate
+    const canVentilate = evaluateForecastPoint(
+      currentTemp,
+      currentHum,
+      currentAbsHum,
+      entry.temperature,
+      entry.humidity,
+      goal,
+      ahThreshold,
+      balancedMaxTemp,
+      minHumidity,
+      maxHumidity,
+    );
+
     if (prevEntry) {
       const dtHours = Math.max(0.1, (entry.date.getTime() - prevEntry.date.getTime()) / (3600 * 1000));
       const outdoorTemp = entry.temperature;
-      const canVentilate = isVentilatingAt(entry.date);
 
       // Numerical sub-stepping (15 min steps) for accuracy
       const subSteps = Math.ceil(dtHours * 4);
@@ -108,7 +107,6 @@ export function predictRoomTemperatureSeries(
       }
     }
 
-    const canVentilate = isVentilatingAt(entry.date);
     points.push({
       datetime: entry.datetime,
       date: entry.date,

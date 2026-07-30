@@ -1,17 +1,11 @@
-/**
- * Core ventilation recommendation engine.
- *
- * Determines for each room whether to ventilate based on the configured goal,
- * indoor/outdoor conditions, and optional per-room overrides.
- */
-
 import type { VentilationGoal, SensorReadings, VentilationStatus, RoomAdvice, RoomConfig, ForecastEntry, NextStateChange, ForecastWindow } from '../types';
 import { VentilationStatus as VS } from '../types';
 import { calculateAbsoluteHumidity } from './humidity';
 import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_ROOM_ICON } from '../const';
 import { localize } from '../localize/localize';
 import type { HomeAssistant } from 'custom-card-helpers';
-import { computeForecastWindow } from './forecast';
+import { computeForecastWindow, computeForecastWindowFromPrediction } from './forecast';
+import { predictRoomTemperatureSeries } from './thermal-prediction';
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
@@ -84,7 +78,6 @@ export function readBinarySensor(hass: HomeAssistant, entityId: string | undefin
   const stateObj = hass.states[entityId];
   if (!stateObj || stateObj.state === 'unavailable' || stateObj.state === 'unknown') return null;
 
-  // Support both binary_sensor (on/off) and contact sensors (open/closed)
   const state = stateObj.state.toLowerCase();
   if (state === 'on' || state === 'open') return 'open';
   if (state === 'off' || state === 'closed') return 'closed';
@@ -136,6 +129,9 @@ export function getVentilationAdvice(
   globalMaxHumidity?: number,
   forecastEntries: ForecastEntry[] = [],
   weatherEntity?: string,
+  insulationFactor?: number,
+  ventilationSpeed?: number,
+  forecastHours?: number,
 ): RoomAdvice {
   // Indoor readings
   const indoor = getSensorReadings(hass, room.temperature, room.humidity);
@@ -191,18 +187,43 @@ export function getVentilationAdvice(
     }
   }
 
-  // Room-specific forecast window
-  const forecastWindow = forecastEntries.length > 0
-    ? computeForecastWindow(
-        forecastEntries,
+  // Room-specific thermal prediction series
+  const predictionSeries = forecastEntries.length > 0 && indoor.temperature !== null
+    ? predictRoomTemperatureSeries(
         indoor,
+        forecastEntries,
         goal,
+        { insulationFactor, ventilationSpeed, maxHours: forecastHours ?? 24 },
         ahThreshold,
         effectiveMaxTemp,
         effectiveMinHumidity,
         effectiveMaxHumidity,
       )
-    : null;
+    : [];
+
+  // Room-specific forecast window derived from prediction series
+  const forecastWindow = predictionSeries.length > 0
+    ? computeForecastWindowFromPrediction(predictionSeries)
+    : forecastEntries.length > 0
+      ? computeForecastWindow(
+          forecastEntries,
+          indoor,
+          goal,
+          ahThreshold,
+          effectiveMaxTemp,
+          effectiveMinHumidity,
+          effectiveMaxHumidity,
+        )
+      : null;
+
+  // Sync current status with forecast window prediction at t=0
+  if (forecastWindow?.canVentilateNow && status === VS.DO_NOT_VENTILATE) {
+    status = VS.VENTILATE_NOW;
+    if (indoor.temperature !== null && outdoor.temperature !== null) {
+      const delta = Math.abs(Math.round((indoor.temperature - outdoor.temperature) * 10) / 10).toFixed(1);
+      reason = localize('reason.cooling_ok', { delta });
+    }
+  }
 
   // Window correctness evaluation
   let windowCorrect: boolean | null = null;
@@ -212,7 +233,7 @@ export function getVentilationAdvice(
     } else if (status === VS.DO_NOT_VENTILATE) {
       windowCorrect = windowState === 'closed';
     } else {
-      windowCorrect = null; // Caution — either is acceptable
+      windowCorrect = null;
     }
   }
 
@@ -240,6 +261,7 @@ export function getVentilationAdvice(
     outdoor,
     hasCustomOutdoor,
     forecastWindow,
+    predictionSeries,
     windowState,
     windowCorrect,
     nextStateChange,
@@ -259,14 +281,14 @@ function evaluateCooling(
 
   const delta = Math.round((indoor.temperature - outdoor.temperature) * 10) / 10;
 
-  if (outdoor.temperature >= indoor.temperature) {
+  if (outdoor.temperature > indoor.temperature + 0.1) {
     return {
       status: VS.DO_NOT_VENTILATE,
       reason: localize('reason.cooling_no', { outdoor_temp: outdoor.temperature.toFixed(1) }),
     };
   }
 
-  // Outdoor is cooler
+  // Outdoor is lower or about equal ("about or less")
   if (indoor.temperature > maxTemp) {
     return {
       status: VS.VENTILATE_NOW,
@@ -276,17 +298,12 @@ function evaluateCooling(
         delta: Math.abs(delta).toFixed(1),
       }),
     };
-  } else if (delta > 1.5) {
-    return {
-      status: VS.VENTILATE_NOW,
-      reason: localize('reason.cooling_ok', { delta: Math.abs(delta).toFixed(1) }),
-    };
-  } else {
-    return {
-      status: VS.CAUTION,
-      reason: localize('reason.cooling_ok', { delta: Math.abs(delta).toFixed(1) }),
-    };
   }
+
+  return {
+    status: VS.VENTILATE_NOW,
+    reason: localize('reason.cooling_ok', { delta: Math.abs(delta).toFixed(1) }),
+  };
 }
 
 function evaluateWarming(
@@ -437,29 +454,21 @@ function evaluateBalanced(
     };
   }
 
+  // Priority 3: Cooler or equal outside -> Fresh air exchange & cooling
+  if (outdoor.temperature <= indoor.temperature + 0.1 && indoor.temperature >= 16) {
+    const delta = Math.round((indoor.temperature - outdoor.temperature) * 10) / 10;
+    return {
+      status: VS.VENTILATE_NOW,
+      reason: localize('reason.cooling_ok', { delta: Math.abs(delta).toFixed(1) }),
+    };
+  }
+
   if (
     (indoor.humidity === null || indoor.humidity >= minHumidity) &&
     ahDelta !== null &&
     ahDelta >= ahThreshold
   ) {
     return { status: VS.VENTILATE_NOW, reason: localize('reason.balanced_humid') };
-  }
-
-  // Priority 3: Cooler outside but below max temp -> Caution
-  if (outdoor.temperature < indoor.temperature - 1.5 && indoor.temperature > maxTemp - 2) {
-    const delta = Math.round((indoor.temperature - outdoor.temperature) * 10) / 10;
-    return {
-      status: VS.CAUTION,
-      reason: localize('reason.balanced_cool', { delta: delta.toFixed(1) }),
-    };
-  }
-
-  // Priority 4: Warmer outside when indoor is cold
-  if (outdoor.temperature > indoor.temperature && indoor.temperature < maxTemp) {
-    return {
-      status: VS.VENTILATE_NOW,
-      reason: localize('reason.cooling_no', { outdoor_temp: outdoor.temperature.toFixed(1) }),
-    };
   }
 
   return { status: VS.DO_NOT_VENTILATE, reason: localize('reason.balanced_no') };
