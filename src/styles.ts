@@ -277,7 +277,19 @@ export const cardStyles = css`
     align-self: center;
   }
 
+  .weighty-stat .stat-icon.room-temp {
+    color: var(--vc-green, #10b981);
+  }
+
+  .weighty-stat .stat-icon.temp {
+    color: var(--primary-color, #2196f3);
+  }
+
   .weighty-stat .stat-icon.hum {
+    color: var(--vc-blue, #2196f3);
+  }
+
+  .weighty-stat .stat-icon.abs-hum {
     color: var(--vc-blue, #2196f3);
   }
 
@@ -302,6 +314,16 @@ export const cardStyles = css`
     background: color-mix(in srgb, var(--primary-text-color) 6%, transparent);
     padding: 2px 8px;
     border-radius: 10px;
+    transition: all 0.15s ease;
+  }
+
+  .graph-range-pill.clickable {
+    cursor: pointer;
+  }
+
+  .graph-range-pill.clickable:hover {
+    background: color-mix(in srgb, var(--primary-color) 16%, transparent);
+    color: var(--primary-color);
   }
 
   .forecast-svg-chart,
@@ -718,22 +740,6 @@ export const cardStyles = css`
     }
   }
 
-  .expanded-reason-box {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--primary-text-color);
-    padding: 4px 0;
-  }
-
-  .expanded-reason-box ha-icon {
-    --mdc-icon-size: 16px;
-    color: var(--primary-color);
-    flex-shrink: 0;
-  }
-
   /* ── Responsive ───────────────────────────────────────────── */
   @media (max-width: 400px) {
     .forecast-windows-section,
@@ -791,61 +797,5 @@ export const cardStyles = css`
     padding: 2px 6px;
     border-radius: 4px;
     margin-left: 4px;
-  }
-
-  /* ── Room Temperature Prediction Graph ─────────────────────── */
-  .prediction-graph-card {
-    background: color-mix(in srgb, var(--primary-text-color) 3%, transparent);
-    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
-    border-radius: 12px;
-    padding: 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .prediction-legend {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 11px;
-    color: var(--secondary-text-color);
-  }
-
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-  }
-
-  .legend-color {
-    width: 10px;
-    height: 3px;
-    border-radius: 2px;
-  }
-
-  .legend-color.predicted-room {
-    background: var(--vc-green, #10b981);
-  }
-
-  .legend-color.outdoor-reference {
-    background: var(--primary-color, #2196f3);
-    border-top: 1px dashed var(--primary-color, #2196f3);
-  }
-
-  .legend-color.openable-zone {
-    background: var(--vc-green, #10b981);
-    opacity: 0.6;
-    height: 8px;
-    border-radius: 2px;
-  }
-
-  .openable-zone-band {
-    fill: var(--vc-green, #10b981);
-    fill-opacity: 0.2;
-    stroke: var(--vc-green, #10b981);
-    stroke-opacity: 0.7;
-    stroke-width: 1.5px;
-    opacity: 1;
   }
 `;

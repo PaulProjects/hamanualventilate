@@ -48,6 +48,7 @@ export interface VentilationCardConfig extends LovelaceCardConfig {
   history_hours?: number;            // hours of history to display (default: 24)
   forecast_hours?: number;           // hours of forecast to display (default: 24)
   show_next_state_change?: boolean;  // show time to next open/closed state change (default: true)
+  show_humidity_slots?: boolean;     // display upcoming humidity slot table in expanded room details (default: false)
   // Thermal prediction settings
   insulation_factor?: number;        // room thermal insulation coefficient (default: 0.05)
   ventilation_speed?: number;        // air exchange speed when windows open (default: 0.35)

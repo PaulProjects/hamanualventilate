@@ -5,7 +5,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 
 import type { VentilationCardConfig, RoomConfig } from './types';
 import { localize } from './localize/localize';
-import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS } from './const';
+import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS, DEFAULT_SHOW_HUMIDITY_SLOTS } from './const';
 
 @customElement('ventilation-card-editor')
 export class VentilationCardEditor extends LitElement implements LovelaceCardEditor {
@@ -30,6 +30,7 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
       history_hours: config.history_hours ?? DEFAULT_HISTORY_HOURS,
       forecast_hours: config.forecast_hours ?? DEFAULT_FORECAST_HOURS,
       show_next_state_change: config.show_next_state_change ?? true,
+      show_humidity_slots: config.show_humidity_slots ?? DEFAULT_SHOW_HUMIDITY_SLOTS,
       insulation_factor: config.insulation_factor ?? 0.05,
       ventilation_speed: config.ventilation_speed ?? 0.35,
     };
@@ -200,6 +201,15 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
         .value=${this._config?.show_next_state_change ?? true}
         label="${localize('editor.show_next_state_change')}"
         .configValue=${'show_next_state_change'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ boolean: {} }}
+        .value=${this._config?.show_humidity_slots ?? DEFAULT_SHOW_HUMIDITY_SLOTS}
+        label="${localize('editor.show_humidity_slots')}"
+        .configValue=${'show_humidity_slots'}
         @value-changed=${this._selectorChanged}
       ></ha-selector>
 

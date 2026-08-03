@@ -17,6 +17,7 @@ export const DEFAULT_ROOM_ICON = 'mdi:home-thermometer';
 
 // Default graph history and prediction ranges
 export const DEFAULT_SHOW_HISTORY = false;
+export const DEFAULT_SHOW_HUMIDITY_SLOTS = false;
 export const DEFAULT_HISTORY_HOURS = 24;
 export const DEFAULT_FORECAST_HOURS = 24;
 

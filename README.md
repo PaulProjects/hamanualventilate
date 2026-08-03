@@ -186,6 +186,11 @@ rooms:
 | `outdoor_humidity` | string | No | `undefined` | Global outdoor humidity sensor |
 | `balanced_max_temperature` | number | No | `24` | Target temperature threshold for `balanced` goal |
 | `ah_threshold` | number | No | `2.0` | Absolute humidity threshold ($g/m^3$) |
+| `show_absolute_humidity` | boolean | No | `true` | Display absolute humidity ($g/m^3$) |
+| `show_forecast` | boolean | No | `true` | Display forecast summary chips |
+| `show_history` | boolean | No | `false` | Display sensor history in graph |
+| `show_humidity_slots` | boolean | No | `false` | Display upcoming humidity slot table in expanded details |
+| `show_next_state_change` | boolean | No | `true` | Show time to next open/closed state change |
 | `rooms` | array | **Yes** | `[]` | List of room configuration objects |
 
 ---
@@ -201,14 +206,27 @@ The card includes a custom visual editor (`ventilation-card-editor`) featuring:
 
 ## 10. Installation & Development
 
-### Build from source
+### Method 1: Via HACS (Recommended)
+1. In Home Assistant, navigate to **HACS** → **Frontend**.
+2. Click the three dots (⋮) in the top-right corner and choose **Custom repositories**.
+3. Add the repository URL, select **Dashboard** (or **Lovelace**) as category, and click **Add**.
+4. Click **Download** on the card repository.
+5. Add `type: custom:ventilation-card` to your dashboard.
+
+### Method 2: Manual Installation
+1. Build the production bundle:
+   ```bash
+   npm install
+   npm run build
+   ```
+2. Copy `dist/ventilation-card.js` into your Home Assistant `config/www/` directory.
+3. In Home Assistant, go to **Settings** → **Dashboards** → **Resources** (top-right menu).
+4. Add `/local/ventilation-card.js` as a **JavaScript Module**.
+5. Add the card to any dashboard using `type: custom:ventilation-card`.
+
+### Development Mode
 ```bash
-# Install dependencies
-npm install
-
-# Build single production bundle (dist/ventilation-card.js)
-npm run build
-
 # Start dev server with hot-reload (port 5005)
 npm start
 ```
+

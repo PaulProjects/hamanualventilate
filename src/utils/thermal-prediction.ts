@@ -31,6 +31,10 @@ export function predictRoomTemperatureSeries(
   const ventilationSpeed = options.ventilationSpeed ?? 0.35;
   const maxHours = options.maxHours ?? 24;
 
+  const now = new Date();
+  const nowMs = now.getTime();
+  const endTime = nowMs + maxHours * 3600 * 1000;
+
   const validEntries = forecast
     .map((e) => ({
       datetime: e.datetime,
@@ -43,18 +47,21 @@ export function predictRoomTemperatureSeries(
 
   if (validEntries.length === 0) return [];
 
-  // Limit to maxHours
-  const startTime = validEntries[0].date.getTime();
-  const endTime = startTime + maxHours * 3600 * 1000;
-  const horizonEntries = validEntries.filter((e) => e.date.getTime() <= endTime + 3600 * 1000);
+  // Filter future entries up to maxHours from now (allowing entries starting near now)
+  const horizonEntries = validEntries.filter(
+    (e) => e.date.getTime() > nowMs - 30 * 60 * 1000 && e.date.getTime() <= endTime + 3600 * 1000,
+  );
+
+  if (horizonEntries.length === 0) return [];
 
   const points: PredictionPoint[] = [];
   let currentTemp = indoor.temperature;
   let currentHum = indoor.humidity;
+  let lastTime = nowMs;
 
   for (let i = 0; i < horizonEntries.length; i++) {
     const entry = horizonEntries[i];
-    const prevEntry = i > 0 ? horizonEntries[i - 1] : null;
+    const entryTime = entry.date.getTime();
 
     const currentAbsHum =
       currentTemp !== null && currentHum !== null
@@ -75,37 +82,37 @@ export function predictRoomTemperatureSeries(
       maxHumidity,
     );
 
-    if (prevEntry) {
-      const dtHours = Math.max(0.1, (entry.date.getTime() - prevEntry.date.getTime()) / (3600 * 1000));
-      const outdoorTemp = entry.temperature;
+    const dtHours = Math.max(0.1, (entryTime - lastTime) / (3600 * 1000));
+    const outdoorTemp = entry.temperature;
 
-      // Numerical sub-stepping (15 min steps) for accuracy
-      const subSteps = Math.ceil(dtHours * 4);
-      const stepDt = dtHours / subSteps;
+    // Numerical sub-stepping (15 min steps) for accuracy
+    const subSteps = Math.ceil(dtHours * 4);
+    const stepDt = dtHours / subSteps;
 
-      for (let s = 0; s < subSteps; s++) {
-        const delta = currentTemp - outdoorTemp;
-        let rate = 0;
+    for (let s = 0; s < subSteps; s++) {
+      const delta = currentTemp - outdoorTemp;
+      let rate = 0;
 
-        if (canVentilate) {
-          // Window open: fast cooling when outdoor is cooler, slower warming when hotter outside
-          if (outdoorTemp < currentTemp) {
-            rate = ventilationSpeed; // rapid cooling
-          } else {
-            rate = ventilationSpeed * 0.4; // slower warming
-          }
+      if (canVentilate) {
+        // Window open: fast cooling when outdoor is cooler, slower warming when hotter outside
+        if (outdoorTemp < currentTemp) {
+          rate = ventilationSpeed; // rapid cooling
         } else {
-          // Window closed: passive thermal conduction through walls/insulation
-          if (outdoorTemp < currentTemp) {
-            rate = insulationFactor;
-          } else {
-            rate = insulationFactor * 0.6; // insulation dampens solar/outdoor heat rise
-          }
+          rate = ventilationSpeed * 0.4; // slower warming
         }
-
-        currentTemp -= rate * delta * stepDt;
+      } else {
+        // Window closed: passive thermal conduction through walls/insulation
+        if (outdoorTemp < currentTemp) {
+          rate = insulationFactor;
+        } else {
+          rate = insulationFactor * 0.6; // insulation dampens solar/outdoor heat rise
+        }
       }
+
+      currentTemp -= rate * delta * stepDt;
     }
+
+    lastTime = entryTime;
 
     points.push({
       datetime: entry.datetime,

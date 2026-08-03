@@ -340,7 +340,8 @@ export function computeForecastWindow(
       ...e,
       parsedDate: new Date(e.datetime),
     }))
-    .filter((e) => !isNaN(e.parsedDate.getTime()) && !isNaN(e.temperature));
+    .filter((e) => !isNaN(e.parsedDate.getTime()) && !isNaN(e.temperature) && e.parsedDate.getTime() >= now.getTime() - 30 * 60 * 1000)
+    .sort((a, b) => a.parsedDate.getTime() - b.parsedDate.getTime());
 
   if (validEntries.length === 0) {
     return {
@@ -433,7 +434,7 @@ export function computeUpcomingWindows(
       ...e,
       parsedDate: new Date(e.datetime),
     }))
-    .filter((e) => !isNaN(e.parsedDate.getTime()) && !isNaN(e.temperature))
+    .filter((e) => !isNaN(e.parsedDate.getTime()) && !isNaN(e.temperature) && e.parsedDate.getTime() >= now.getTime() - 30 * 60 * 1000)
     .sort((a, b) => a.parsedDate.getTime() - b.parsedDate.getTime());
 
   if (validEntries.length === 0) return [];

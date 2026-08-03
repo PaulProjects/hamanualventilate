@@ -78,6 +78,7 @@
     "show_history": "Display Sensor History in Graph",
     "history_hours": "History Duration (Hours)",
     "show_next_state_change": "Show Time to Next State Change",
+    "show_humidity_slots": "Display Upcoming Humidity Slots Table",
     "forecast_hours": "Prediction Duration (Hours)",
     "prediction": "Thermal Prediction Settings",
     "insulation_factor": "Building Thermal Loss Coefficient (Insulation)",
