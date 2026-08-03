@@ -5,7 +5,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 
 import type { VentilationCardConfig, RoomConfig } from './types';
 import { localize } from './localize/localize';
-import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY } from './const';
+import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS } from './const';
 
 @customElement('ventilation-card-editor')
 export class VentilationCardEditor extends LitElement implements LovelaceCardEditor {
@@ -28,7 +28,9 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
       show_absolute_humidity: config.show_absolute_humidity ?? true,
       show_forecast: config.show_forecast ?? true,
       show_inline_forecast: config.show_inline_forecast ?? false,
-      forecast_hours: config.forecast_hours ?? 24,
+      show_history: config.show_history ?? DEFAULT_SHOW_HISTORY,
+      history_hours: config.history_hours ?? DEFAULT_HISTORY_HOURS,
+      forecast_hours: config.forecast_hours ?? DEFAULT_FORECAST_HOURS,
       show_next_state_change: config.show_next_state_change ?? true,
       insulation_factor: config.insulation_factor ?? 0.05,
       ventilation_speed: config.ventilation_speed ?? 0.35,
@@ -175,6 +177,28 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
       <ha-selector
         .hass=${this.hass}
         .selector=${{ boolean: {} }}
+        .value=${this._config?.show_history ?? DEFAULT_SHOW_HISTORY}
+        label="${localize('editor.show_history')}"
+        .configValue=${'show_history'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+
+      ${this._config?.show_history !== false
+        ? html`
+            <ha-selector
+              .hass=${this.hass}
+              .selector=${{ number: { min: 1, max: 72, step: 1, mode: 'slider', unit_of_measurement: 'h' } }}
+              .value=${this._config?.history_hours ?? DEFAULT_HISTORY_HOURS}
+              label="${localize('editor.history_hours')}"
+              .configValue=${'history_hours'}
+              @value-changed=${this._selectorChanged}
+            ></ha-selector>
+          `
+        : nothing}
+
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ boolean: {} }}
         .value=${this._config?.show_next_state_change ?? true}
         label="${localize('editor.show_next_state_change')}"
         .configValue=${'show_next_state_change'}
@@ -183,8 +207,8 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
 
       <ha-selector
         .hass=${this.hass}
-        .selector=${{ number: { min: 6, max: 48, step: 6, mode: 'slider', unit_of_measurement: 'h' } }}
-        .value=${this._config?.forecast_hours ?? 24}
+        .selector=${{ number: { min: 6, max: 72, step: 6, mode: 'slider', unit_of_measurement: 'h' } }}
+        .value=${this._config?.forecast_hours ?? DEFAULT_FORECAST_HOURS}
         label="${localize('editor.forecast_hours')}"
         .configValue=${'forecast_hours'}
         @value-changed=${this._selectorChanged}

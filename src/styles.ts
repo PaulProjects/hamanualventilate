@@ -262,7 +262,6 @@ export const cardStyles = css`
   .outdoor-name {
     font-size: 13px;
     font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--secondary-text-color);
   }
@@ -425,14 +424,8 @@ export const cardStyles = css`
     border-radius: 10px;
   }
 
-  .graph-svg-wrapper {
-    width: 100%;
-    height: 70px;
-    position: relative;
-    margin-top: 4px;
-  }
-
-  .forecast-svg-chart {
+  .forecast-svg-chart,
+  .prediction-svg-chart {
     width: 100%;
     height: 100%;
     display: block;
@@ -616,6 +609,16 @@ export const cardStyles = css`
   .suggestion-badge.status-unknown {
     background: color-mix(in srgb, var(--disabled-text-color, #999) 12%, transparent);
     color: var(--disabled-text-color, #999);
+  }
+
+  .suggestion-badge.to-open {
+    background: color-mix(in srgb, var(--vc-green) 16%, transparent);
+    color: var(--vc-green);
+  }
+
+  .suggestion-badge.to-closed {
+    background: color-mix(in srgb, var(--vc-yellow) 16%, transparent);
+    color: var(--vc-yellow);
   }
 
   /* ── Room Stats (Unboxed & Clean) ──────────────────────────── */
@@ -1188,7 +1191,7 @@ export const cardStyles = css`
 
   .expanded-reason-box {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 8px;
     font-size: 12px;
     line-height: 1.4;
@@ -1200,7 +1203,6 @@ export const cardStyles = css`
     --mdc-icon-size: 16px;
     color: var(--primary-color);
     flex-shrink: 0;
-    margin-top: 1px;
   }
 
   .expanded-section-title {
@@ -1279,15 +1281,33 @@ export const cardStyles = css`
   .graph-svg-wrapper {
     position: relative;
     width: 100%;
+    height: 70px;
     cursor: crosshair;
     touch-action: none;
   }
 
   .hover-crosshair {
     stroke: var(--primary-color, #2196f3);
-    stroke-width: 1;
+    stroke-width: 1.5;
     stroke-dasharray: 3 3;
-    opacity: 0.8;
+    opacity: 0.9;
+    pointer-events: none;
+  }
+
+  .now-divider-line {
+    stroke: var(--secondary-text-color, #8e8e93);
+    stroke-width: 1.2;
+    stroke-dasharray: 2 2;
+    opacity: 0.6;
+  }
+
+  .now-divider-label {
+    fill: var(--secondary-text-color, #8e8e93);
+    font-size: 8px;
+    font-weight: 600;
+    text-anchor: middle;
+    letter-spacing: 0.5px;
+    opacity: 0.85;
   }
 
   .hover-marker {
@@ -1378,14 +1398,19 @@ export const cardStyles = css`
   }
 
   .legend-color.openable-zone {
-    background: color-mix(in srgb, var(--vc-green) 40%, transparent);
+    background: var(--vc-green, #10b981);
+    opacity: 0.6;
     height: 8px;
     border-radius: 2px;
   }
 
   .openable-zone-band {
     fill: var(--vc-green, #10b981);
-    opacity: 0.15;
+    fill-opacity: 0.2;
+    stroke: var(--vc-green, #10b981);
+    stroke-opacity: 0.7;
+    stroke-width: 1.5px;
+    opacity: 1;
   }
 
   /* ── Unified Outdoor Accordion Row ──────────────────────────── */

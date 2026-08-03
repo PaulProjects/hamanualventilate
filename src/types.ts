@@ -46,6 +46,8 @@ export interface VentilationCardConfig extends LovelaceCardConfig {
   show_absolute_humidity?: boolean;  // display absolute humidity g/m³ (default: true)
   show_forecast?: boolean;           // display forecast window predictions (default: true)
   show_inline_forecast?: boolean;    // display full forecast expanded inline instead of modal (default: false)
+  show_history?: boolean;            // display historical data in graph (default: false)
+  history_hours?: number;            // hours of history to display (default: 24)
   forecast_hours?: number;           // hours of forecast to display (default: 24)
   show_next_state_change?: boolean;  // show time to next open/closed state change (default: true)
   // Thermal prediction settings

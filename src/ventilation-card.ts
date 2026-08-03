@@ -1,14 +1,15 @@
-import { LitElement, html, TemplateResult, PropertyValues, nothing } from 'lit';
+import { LitElement, html, svg, TemplateResult, PropertyValues, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, LovelaceCardEditor } from 'custom-card-helpers';
 
 import type { VentilationCardConfig, RoomConfig, RoomAdvice, ForecastEntry, SensorReadings, HealthIssue, ForecastWindow, VentilationWindowRange, PredictionPoint } from './types';
 import { VentilationStatus } from './types';
-import { CARD_VERSION, CARD_NAME, DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP } from './const';
+import { CARD_VERSION, CARD_NAME, DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS } from './const';
 import { cardStyles } from './styles';
 import { localize } from './localize/localize';
 import { getVentilationAdvice, getSensorReadings, readSensor } from './utils/ventilation-logic';
 import { subscribeForecast, extractForecastItems } from './utils/forecast';
+import { fetchHistoryFromHass, HistoryDataPoint } from './utils/history';
 
 /* ── Console banner ─────────────────────────────────────────── */
 console.info(
@@ -54,9 +55,11 @@ export class VentilationCard extends LitElement {
   @state() private _expandedOutdoor = false;
   @state() private _outdoorHoverIndex: number | null = null;
   @state() private _roomHoverIndices: Record<number, number | null> = {};
+  @state() private _historyData: Record<string, HistoryDataPoint[]> = {};
 
   private _forecastUnsub?: () => void;
   private _subscribedEntity?: string;
+  private _historyLastFetched = 0;
 
   static get styles() {
     return cardStyles;
@@ -77,7 +80,9 @@ export class VentilationCard extends LitElement {
       show_absolute_humidity: true,
       show_forecast: true,
       show_inline_forecast: false,
-      forecast_hours: 24,
+      show_history: DEFAULT_SHOW_HISTORY,
+      history_hours: DEFAULT_HISTORY_HOURS,
+      forecast_hours: DEFAULT_FORECAST_HOURS,
       show_next_state_change: true,
       insulation_factor: 0.05,
       ventilation_speed: 0.35,
@@ -106,7 +111,8 @@ export class VentilationCard extends LitElement {
       changedProps.has('_expandedRoomIndex') ||
       changedProps.has('_expandedOutdoor') ||
       changedProps.has('_outdoorHoverIndex') ||
-      changedProps.has('_roomHoverIndices')
+      changedProps.has('_roomHoverIndices') ||
+      changedProps.has('_historyData')
     ) {
       return true;
     }
@@ -134,7 +140,40 @@ export class VentilationCard extends LitElement {
       } else if (!this._forecastUnsub && targetEntity && this.hass) {
         this._subscribeForecast();
       }
+      if (this.config?.show_history !== false) {
+        this._fetchHistoryData();
+      }
     }
+  }
+
+  private async _fetchHistoryData(): Promise<void> {
+    if (!this.hass || !this.config || this.config.show_history === false) {
+      if (Object.keys(this._historyData).length > 0) {
+        this._historyData = {};
+      }
+      return;
+    }
+
+    const historyHours = this.config.history_hours ?? DEFAULT_HISTORY_HOURS;
+    const now = Date.now();
+    if (now - this._historyLastFetched < 30000 && Object.keys(this._historyData).length > 0) {
+      return;
+    }
+    this._historyLastFetched = now;
+
+    const entities: string[] = [];
+    if (this.config.outdoor_temperature) entities.push(this.config.outdoor_temperature);
+    if (this.config.outdoor_humidity) entities.push(this.config.outdoor_humidity);
+
+    for (const room of this.config.rooms || []) {
+      if (room.temperature) entities.push(room.temperature);
+      if (room.humidity) entities.push(room.humidity);
+      if (room.outdoor_temperature_override) entities.push(room.outdoor_temperature_override);
+      if (room.outdoor_humidity_override) entities.push(room.outdoor_humidity_override);
+    }
+
+    const fetched = await fetchHistoryFromHass(this.hass, entities, historyHours);
+    this._historyData = fetched;
   }
 
   protected render(): TemplateResult | typeof nothing {
@@ -197,15 +236,15 @@ export class VentilationCard extends LitElement {
 
           <div class="card-content">
             ${this._showHealthBanner && healthIssues.length > 0
-              ? this._renderHealthBanner(healthIssues)
-              : nothing}
+          ? this._renderHealthBanner(healthIssues)
+          : nothing}
 
             ${this._renderOutdoor(effectiveOutdoor)}
 
             <div class="rooms-container">
               ${advices.map((advice, idx) =>
-                this._renderRoom(advice, rooms[idx], idx),
-              )}
+            this._renderRoom(advice, rooms[idx], idx),
+          )}
             </div>
           </div>
         </ha-card>
@@ -245,13 +284,13 @@ export class VentilationCard extends LitElement {
         </div>
         <ul class="health-issue-list">
           ${issues.map(
-            (issue) => html`
+      (issue) => html`
               <li class="health-issue-item severity-${issue.severity}">
                 <ha-icon icon="${issue.severity === 'error' ? 'mdi:close-circle' : 'mdi:alert-circle'}"></ha-icon>
                 <span>${issue.message}</span>
               </li>
             `,
-          )}
+    )}
         </ul>
       </div>
     `;
@@ -274,15 +313,25 @@ export class VentilationCard extends LitElement {
     `;
   }
 
-  private _handleOutdoorMouseMove(e: MouseEvent, totalPoints: number): void {
-    if (totalPoints <= 0) return;
+  private _handleOutdoorMouseMove(e: MouseEvent, points: Array<{ x: number }>): void {
+    if (!points || points.length === 0) return;
     const svg = e.currentTarget as SVGElement;
     const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const idx = Math.round(ratio * (totalPoints - 1));
-    if (this._outdoorHoverIndex !== idx) {
-      this._outdoorHoverIndex = idx;
+    const targetX = ratio * 500;
+
+    let closestIdx = 0;
+    let minDiff = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const diff = Math.abs(points[i].x - targetX);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestIdx = i;
+      }
+    }
+    if (this._outdoorHoverIndex !== closestIdx) {
+      this._outdoorHoverIndex = closestIdx;
     }
   }
 
@@ -292,15 +341,25 @@ export class VentilationCard extends LitElement {
     }
   }
 
-  private _handleRoomMouseMove(e: MouseEvent, roomIdx: number, totalPoints: number): void {
-    if (totalPoints <= 0) return;
+  private _handleRoomMouseMove(e: MouseEvent, roomIdx: number, points: Array<{ x: number }>): void {
+    if (!points || points.length === 0) return;
     const svg = e.currentTarget as SVGElement;
     const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const idx = Math.round(ratio * (totalPoints - 1));
-    if (this._roomHoverIndices[roomIdx] !== idx) {
-      this._roomHoverIndices = { ...this._roomHoverIndices, [roomIdx]: idx };
+    const targetX = ratio * 500;
+
+    let closestIdx = 0;
+    let minDiff = Infinity;
+    for (let i = 0; i < points.length; i++) {
+      const diff = Math.abs(points[i].x - targetX);
+      if (diff < minDiff) {
+        minDiff = diff;
+        closestIdx = i;
+      }
+    }
+    if (this._roomHoverIndices[roomIdx] !== closestIdx) {
+      this._roomHoverIndices = { ...this._roomHoverIndices, [roomIdx]: closestIdx };
     }
   }
 
@@ -337,46 +396,46 @@ export class VentilationCard extends LitElement {
 
           <div class="outdoor-header-badges">
             ${outdoor.temperature !== null
-              ? html`
+        ? html`
                   <div
                     class="climate-pill-badge ${tempEntity ? 'clickable' : ''}"
                     @click=${(e: Event) => {
-                      if (tempEntity) {
-                        e.stopPropagation();
-                        this._handleMoreInfo(tempEntity);
-                      }
-                    }}
+            if (tempEntity) {
+              e.stopPropagation();
+              this._handleMoreInfo(tempEntity);
+            }
+          }}
                     title="Outdoor climate summary"
                   >
                     <ha-icon icon="mdi:thermometer"></ha-icon>
                     <span>${outdoor.temperature.toFixed(1)}°C</span>
                     ${outdoor.humidity !== null
-                      ? html`
+            ? html`
                           <ha-icon icon="mdi:water-percent" class="pill-humidity-icon"></ha-icon>
                           <span>${outdoor.humidity.toFixed(0)}%</span>
                         `
-                      : nothing}
+            : nothing}
                   </div>
                 `
-              : nothing}
+        : nothing}
 
             ${weatherStateText
-              ? html`
+        ? html`
                   <div
                     class="outdoor-weather-badge ${this.config.weather_entity ? 'clickable' : ''}"
                     @click=${(e: Event) => {
-                      if (this.config.weather_entity) {
-                        e.stopPropagation();
-                        this._handleMoreInfo(this.config.weather_entity);
-                      }
-                    }}
+            if (this.config.weather_entity) {
+              e.stopPropagation();
+              this._handleMoreInfo(this.config.weather_entity);
+            }
+          }}
                     title="${this.config.weather_entity ? `View weather for ${this.config.weather_entity}` : ''}"
                   >
                     <ha-icon icon="mdi:weather-partly-cloudy"></ha-icon>
                     <span>${weatherStateText}</span>
                   </div>
                 `
-              : nothing}
+        : nothing}
 
             <div
               class="outdoor-details-trigger ${this._expandedOutdoor ? 'expanded' : ''}"
@@ -389,29 +448,112 @@ export class VentilationCard extends LitElement {
         </div>
 
         ${this._expandedOutdoor
-          ? html`
+        ? html`
               <div class="outdoor-expanded-panel" @click=${(e: Event) => e.stopPropagation()}>
                 ${this._renderOutdoorForecastGraph(outdoor)}
               </div>
             `
-          : nothing}
+        : nothing}
       </div>
     `;
   }
 
   private _renderOutdoorForecastGraph(outdoor: SensorReadings): TemplateResult {
-    const hours = this.config.forecast_hours ?? 24;
-    const forecast = this._getEffectiveForecast().slice(0, hours);
-    if (!forecast || forecast.length === 0) {
+    const forecastHours = this.config.forecast_hours ?? DEFAULT_FORECAST_HOURS;
+    const historyHours = this.config.history_hours ?? DEFAULT_HISTORY_HOURS;
+    const showHistory = this.config.show_history ?? DEFAULT_SHOW_HISTORY;
+
+    const forecast = this._getEffectiveForecast().slice(0, forecastHours);
+
+    interface GraphItem {
+      datetime: string;
+      date: Date;
+      dateMs: number;
+      temperature: number;
+      humidity?: number;
+      isHistory?: boolean;
+    }
+
+    const items: GraphItem[] = [];
+    const now = new Date();
+    const nowMs = now.getTime();
+    const historyStartMs = nowMs - historyHours * 3600 * 1000;
+
+    const outdoorTempEntity = this.config.outdoor_temperature;
+    const outdoorHumEntity = this.config.outdoor_humidity;
+
+    if (showHistory && outdoorTempEntity && this._historyData[outdoorTempEntity]) {
+      const tempHist = this._historyData[outdoorTempEntity] || [];
+      const humHist = outdoorHumEntity ? (this._historyData[outdoorHumEntity] || []) : [];
+
+      for (const hp of tempHist) {
+        const hpDate = toDate(hp.date || hp.datetime);
+        const hpMs = hpDate.getTime();
+        if (!isNaN(hpMs) && hpMs >= historyStartMs && hpMs <= nowMs) {
+          let humVal: number | undefined = undefined;
+          if (humHist.length > 0) {
+            let minHDiff = Infinity;
+            for (const hhp of humHist) {
+              const hhpMs = toDate(hhp.date || hhp.datetime).getTime();
+              const hDiff = Math.abs(hhpMs - hpMs);
+              if (hDiff < minHDiff) {
+                minHDiff = hDiff;
+                humVal = hhp.state;
+              }
+            }
+          }
+          items.push({
+            datetime: hp.datetime,
+            date: hpDate,
+            dateMs: hpMs,
+            temperature: hp.state,
+            humidity: humVal,
+            isHistory: true,
+          });
+        }
+      }
+    }
+
+    // Add current outdoor reading if available
+    if (outdoor.temperature !== null) {
+      items.push({
+        datetime: now.toISOString(),
+        date: now,
+        dateMs: nowMs,
+        temperature: outdoor.temperature,
+        humidity: outdoor.humidity ?? undefined,
+        isHistory: false,
+      });
+    }
+
+    // Add forecast entries
+    for (const f of forecast) {
+      const fDate = toDate(f.datetime);
+      const fMs = fDate.getTime();
+      if (!isNaN(fMs) && (!showHistory || fMs >= historyStartMs)) {
+        items.push({
+          datetime: f.datetime,
+          date: fDate,
+          dateMs: fMs,
+          temperature: f.temperature,
+          humidity: f.humidity,
+          isHistory: false,
+        });
+      }
+    }
+
+    items.sort((a, b) => a.dateMs - b.dateMs);
+
+    if (items.length === 0) {
       return html`
         <div class="outdoor-forecast-empty">
           <ha-icon icon="mdi:chart-line-variant"></ha-icon>
-          <span>No weather forecast temperature data available</span>
+          <span>No weather temperature data available</span>
         </div>
       `;
     }
 
-    const temps = forecast.map((f) => f.temperature);
+    const temps = items.map((f) => f.temperature);
     const rawMin = Math.min(...temps);
     const rawMax = Math.max(...temps);
     const pad = Math.max(1, (rawMax - rawMin) * 0.15);
@@ -425,34 +567,31 @@ export class VentilationCard extends LitElement {
     const marginBottom = 10;
     const usableHeight = height - marginTop - marginBottom;
 
-    const N = forecast.length;
-    const points = forecast.map((item, i) => {
-      const x = N > 1 ? (i / (N - 1)) * width : width / 2;
+    const tMin = items[0].dateMs;
+    const tMax = items[items.length - 1].dateMs;
+    const tRange = tMax - tMin || 1;
+
+    const points = items.map((item) => {
+      const x = (item.dateMs - tMin) / tRange * width;
       const norm = (item.temperature - minTemp) / tempRange;
       const y = height - marginBottom - norm * usableHeight;
-      return { x, y, item };
+      return { x, y, dateMs: item.dateMs, item };
     });
 
-    let linePath = `M ${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
-    for (let i = 0; i < points.length - 1; i++) {
-      const p0 = points[i];
-      const p1 = points[i + 1];
-      const cp1x = p0.x + (p1.x - p0.x) / 3;
-      const cp1y = p0.y;
-      const cp2x = p0.x + 2 * (p1.x - p0.x) / 3;
-      const cp2y = p1.y;
-      linePath += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)}`;
-    }
+    const nowX = (nowMs - tMin) / tRange * width;
+    const hasHistoryPoints = items.some((i) => i.isHistory);
 
-    const fillPath = `${linePath} L ${points[points.length - 1].x.toFixed(1)},${height} L ${points[0].x.toFixed(1)},${height} Z`;
+    const { pastPts, futurePts } = splitPointsByTime(points, nowMs);
 
-    const step = Math.max(1, Math.floor(N / 4));
+    const pastPath = buildSplinePath(pastPts);
+    const futurePath = buildSplinePath(futurePts);
+    const fullLinePath = buildSplinePath(points);
+    const fillPath = `${fullLinePath} L ${points[points.length - 1].x.toFixed(1)},${height} L ${points[0].x.toFixed(1)},${height} Z`;
+
+    const step = Math.max(1, Math.floor(points.length / 4));
     const timeLabels = points
-      .filter((_, idx) => idx % step === 0 || idx === N - 1)
-      .map((p) => {
-        const d = new Date(p.item.datetime);
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      });
+      .filter((_, idx) => idx % step === 0 || idx === points.length - 1)
+      .map((p) => p.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
     const hoverPoint = this._outdoorHoverIndex !== null && points[this._outdoorHoverIndex]
       ? points[this._outdoorHoverIndex]
@@ -463,34 +602,38 @@ export class VentilationCard extends LitElement {
       ? (hoverPoint.item.humidity ?? outdoor.humidity)
       : outdoor.humidity;
 
+    const rangeLabel = hasHistoryPoints
+      ? `History ${historyHours}h · Forecast ${forecastHours}h (${rawMin.toFixed(1)}° – ${rawMax.toFixed(1)}°)`
+      : `Forecast ${rawMin.toFixed(1)}° – ${rawMax.toFixed(1)}° (${forecastHours}h)`;
+
     return html`
       <div class="integrated-graph-card">
         <div class="graph-floating-header">
           <div class="graph-current-stats">
             ${displayTemp !== null
-              ? html`
+        ? html`
                   <div class="weighty-stat">
                     <ha-icon icon="mdi:thermometer" class="stat-icon temp"></ha-icon>
                     <span class="weighty-value">${displayTemp.toFixed(1)}</span>
                     <span class="weighty-unit">°C</span>
                   </div>
                 `
-              : nothing}
+        : nothing}
             ${displayHum !== null
-              ? html`
+        ? html`
                   <div class="weighty-stat">
                     <ha-icon icon="mdi:water-percent" class="stat-icon hum"></ha-icon>
                     <span class="weighty-value">${displayHum.toFixed(0)}</span>
                     <span class="weighty-unit">%</span>
                   </div>
                 `
-              : nothing}
+        : nothing}
             ${hoverPoint
-              ? html`<span class="hover-time-tag">${new Date(hoverPoint.item.datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`
-              : nothing}
+        ? html`<span class="hover-time-tag">${hoverPoint.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${hoverPoint.item.isHistory ? ' (Hist)' : ''}</span>`
+        : nothing}
           </div>
           <div class="graph-range-pill">
-            <span>Forecast ${rawMin.toFixed(1)}° – ${rawMax.toFixed(1)}° (${hours}h)</span>
+            <span>${rangeLabel}</span>
           </div>
         </div>
 
@@ -499,14 +642,14 @@ export class VentilationCard extends LitElement {
             viewBox="0 0 ${width} ${height}"
             preserveAspectRatio="none"
             class="forecast-svg-chart"
-            @mousemove=${(e: MouseEvent) => this._handleOutdoorMouseMove(e, points.length)}
+            @mousemove=${(e: MouseEvent) => this._handleOutdoorMouseMove(e, points)}
             @mouseleave=${() => this._handleOutdoorMouseLeave()}
             @touchmove=${(e: TouchEvent) => {
-              if (e.touches.length > 0) {
-                const touch = e.touches[0];
-                this._handleOutdoorMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, points.length);
-              }
-            }}
+        if (e.touches.length > 0) {
+          const touch = e.touches[0];
+          this._handleOutdoorMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, points);
+        }
+      }}
             @touchend=${() => this._handleOutdoorMouseLeave()}
           >
             <defs>
@@ -515,17 +658,64 @@ export class VentilationCard extends LitElement {
                 <stop offset="100%" stop-color="var(--primary-color, #2196f3)" stop-opacity="0.0" />
               </linearGradient>
             </defs>
-            <path d="${fillPath}" fill="url(#outdoorTempGradient)" />
-            <path
-              d="${linePath}"
-              fill="none"
-              stroke="var(--primary-color, #2196f3)"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
+            ${fillPath ? svg`<path d="${fillPath}" fill="url(#outdoorTempGradient)" />` : nothing}
+
+            ${pastPath
+        ? svg`
+                  <path
+                    d="${pastPath}"
+                    fill="none"
+                    stroke="var(--primary-color, #2196f3)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                `
+        : nothing}
+
+            ${futurePath
+        ? svg`
+                  <path
+                    d="${futurePath}"
+                    fill="none"
+                    stroke="var(--primary-color, #2196f3)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-dasharray="4 3"
+                  />
+                `
+        : nothing}
+
+            ${!pastPath && !futurePath && fullLinePath
+        ? svg`
+                  <path
+                    d="${fullLinePath}"
+                    fill="none"
+                    stroke="var(--primary-color, #2196f3)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-dasharray="4 3"
+                  />
+                `
+        : nothing}
+
+            ${hasHistoryPoints && nowX > 0 && nowX < width
+        ? svg`
+                  <line
+                    x1="${nowX.toFixed(1)}"
+                    y1="0"
+                    x2="${nowX.toFixed(1)}"
+                    y2="${height}"
+                    class="now-divider-line"
+                  />
+                  <text x="${nowX.toFixed(1)}" y="12" class="now-divider-label">NOW</text>
+                `
+        : nothing}
+
             ${points.map(
-              (p, idx) => html`
+          (p, idx) => svg`
                 <circle
                   cx="${p.x.toFixed(1)}"
                   cy="${p.y.toFixed(1)}"
@@ -535,10 +725,10 @@ export class VentilationCard extends LitElement {
                   stroke-width="${idx === this._outdoorHoverIndex ? '2.5' : '1.8'}"
                 />
               `,
-            )}
+        )}
 
             ${hoverPoint
-              ? html`
+        ? svg`
                   <line
                     x1="${hoverPoint.x.toFixed(1)}"
                     y1="0"
@@ -547,7 +737,7 @@ export class VentilationCard extends LitElement {
                     class="hover-crosshair"
                   />
                 `
-              : nothing}
+        : nothing}
           </svg>
         </div>
 
@@ -570,8 +760,7 @@ export class VentilationCard extends LitElement {
     return html`
       <div
         class="room-row status-${advice.status} ${isExpanded ? 'is-expanded' : ''}"
-        @click=${(e: Event) => this._toggleRoomExpand(roomIdx, e)}
-        title="Click to toggle room details"
+        @click=${(e: Event) => this._toggleRoomExpand(roomIdx, e)}       
       >
         <div class="room-header">
           <div class="room-title-group">
@@ -583,49 +772,34 @@ export class VentilationCard extends LitElement {
 
           <div class="room-header-badges">
             ${advice.indoor.temperature !== null
-              ? html`
+        ? html`
                   <div
                     class="climate-pill-badge ${tempEntity ? 'clickable' : ''}"
                     @click=${(e: Event) => {
-                      if (tempEntity) {
-                        e.stopPropagation();
-                        this._handleMoreInfo(tempEntity);
-                      }
-                    }}
+            if (tempEntity) {
+              e.stopPropagation();
+              this._handleMoreInfo(tempEntity);
+            }
+          }}
                     title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
                   >
                     <ha-icon icon="mdi:thermometer"></ha-icon>
                     <span>${advice.indoor.temperature.toFixed(1)}°C</span>
                     ${advice.indoor.humidity !== null
-                      ? html`
+            ? html`
                           <ha-icon icon="mdi:water-percent" class="pill-humidity-icon"></ha-icon>
                           <span>${advice.indoor.humidity.toFixed(0)}%</span>
                         `
-                      : nothing}
+            : nothing}
                   </div>
                 `
-              : nothing}
+        : nothing}
 
             ${advice.windowState !== null
-              ? this._renderWindowBadge(advice, room)
-              : nothing}
+        ? this._renderWindowBadge(advice, room)
+        : nothing}
 
-            ${this.config.show_next_state_change !== false && advice.nextStateChange
-              ? html`
-                  <div
-                    class="next-state-chip ${advice.nextStateChange.targetState === 'open' ? 'to-open' : 'to-closed'}"
-                    title="Time to next state change (${advice.nextStateChange.targetState})"
-                  >
-                    <ha-icon icon="${advice.nextStateChange.targetState === 'open' ? 'mdi:window-open-variant' : 'mdi:window-closed-variant'}"></ha-icon>
-                    <span>${advice.nextStateChange.targetState === 'open' ? localize('forecast.next_state_open', { time: advice.nextStateChange.formattedTime }) : localize('forecast.next_state_closed', { time: advice.nextStateChange.formattedTime })}</span>
-                  </div>
-                `
-              : nothing}
-
-            <div class="suggestion-badge status-${advice.status}">
-              <ha-icon icon="${this._getStatusIcon(advice.status)}"></ha-icon>
-              <span class="suggestion-text">${localize(`status.${advice.status}`)}</span>
-            </div>
+            ${this._renderSuggestionBadge(advice)}
 
             <div
               class="room-details-trigger ${isExpanded ? 'expanded' : ''}"
@@ -638,12 +812,12 @@ export class VentilationCard extends LitElement {
         </div>
 
         ${this.config.show_forecast !== false && advice.forecastWindow
-          ? this._renderCompactNextWindow(advice.forecastWindow, roomIdx)
-          : nothing}
+        ? this._renderCompactNextWindow(advice.forecastWindow, roomIdx)
+        : nothing}
 
         ${isExpanded
-          ? this._renderExpandedRoomDetails(advice, room, roomIdx)
-          : nothing}
+        ? this._renderExpandedRoomDetails(advice, room, roomIdx)
+        : nothing}
       </div>
     `;
   }
@@ -726,15 +900,15 @@ export class VentilationCard extends LitElement {
           <div class="graph-floating-header">
             <div class="graph-current-stats">
               ${advice.indoor.temperature !== null
-                ? html`
+        ? html`
                     <div
                       class="weighty-stat ${tempEntity ? 'clickable' : ''}"
                       @click=${(e: Event) => {
-                        if (tempEntity) {
-                          e.stopPropagation();
-                          this._handleMoreInfo(tempEntity);
-                        }
-                      }}
+            if (tempEntity) {
+              e.stopPropagation();
+              this._handleMoreInfo(tempEntity);
+            }
+          }}
                       title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
                     >
                       <ha-icon icon="mdi:thermometer" class="stat-icon temp"></ha-icon>
@@ -742,17 +916,17 @@ export class VentilationCard extends LitElement {
                       <span class="weighty-unit">°C</span>
                     </div>
                   `
-                : nothing}
+        : nothing}
               ${advice.indoor.humidity !== null
-                ? html`
+        ? html`
                     <div
                       class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
                       @click=${(e: Event) => {
-                        if (humidityEntity) {
-                          e.stopPropagation();
-                          this._handleMoreInfo(humidityEntity);
-                        }
-                      }}
+            if (humidityEntity) {
+              e.stopPropagation();
+              this._handleMoreInfo(humidityEntity);
+            }
+          }}
                       title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
                     >
                       <ha-icon icon="mdi:water-percent" class="stat-icon hum"></ha-icon>
@@ -760,17 +934,17 @@ export class VentilationCard extends LitElement {
                       <span class="weighty-unit">%</span>
                     </div>
                   `
-                : nothing}
+        : nothing}
               ${showAbsHum && advice.indoor.absoluteHumidity !== null
-                ? html`
+        ? html`
                     <div
                       class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
                       @click=${(e: Event) => {
-                        if (humidityEntity) {
-                          e.stopPropagation();
-                          this._handleMoreInfo(humidityEntity);
-                        }
-                      }}
+            if (humidityEntity) {
+              e.stopPropagation();
+              this._handleMoreInfo(humidityEntity);
+            }
+          }}
                       title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
                     >
                       <ha-icon icon="mdi:water" class="stat-icon abs-hum"></ha-icon>
@@ -778,43 +952,42 @@ export class VentilationCard extends LitElement {
                       <span class="weighty-unit">g/m³</span>
                     </div>
                   `
-                : nothing}
+        : nothing}
             </div>
 
             ${advice.hasCustomOutdoor
-              ? html`
+        ? html`
                   <div
                     class="graph-range-pill ${customOutdoorMain ? 'clickable' : ''}"
                     @click=${(e: Event) => {
-                      if (customOutdoorMain) {
-                        e.stopPropagation();
-                        this._handleMoreInfo(customOutdoorMain);
-                      }
-                    }}
+            if (customOutdoorMain) {
+              e.stopPropagation();
+              this._handleMoreInfo(customOutdoorMain);
+            }
+          }}
                     title="${customOutdoorMain ? `View details for ${customOutdoorMain}` : ''}"
                   >
                     <span>Outdoor: ${advice.outdoor.temperature?.toFixed(1)}°C · ${advice.outdoor.humidity?.toFixed(0)}%</span>
                   </div>
                 `
-              : nothing}
+        : nothing}
           </div>
 
           ${advice.reason
-            ? html`
+        ? html`
                 <div class="expanded-reason-box">
                   <ha-icon icon="mdi:information-outline"></ha-icon>
                   <span>${advice.reason}</span>
                 </div>
               `
-            : nothing}
+        : nothing}
 
           ${predictionSeries.length > 0
-            ? this._renderRoomPredictionGraph(predictionSeries, roomIdx ?? 0)
-            : nothing}
-
+        ? this._renderRoomPredictionGraph(predictionSeries, roomIdx ?? 0, advice.forecastWindow, room)
+        : nothing}
           ${advice.forecastWindow
-            ? this._renderUpcomingWindows(advice.forecastWindow)
-            : nothing}
+        ? this._renderUpcomingWindows(advice.forecastWindow)
+        : nothing}
         </div>
       </div>
     `;
@@ -823,14 +996,87 @@ export class VentilationCard extends LitElement {
   private _renderRoomPredictionGraph(
     series: PredictionPoint[],
     roomIdx: number,
+    forecastWindow?: ForecastWindow | null,
+    room?: RoomConfig,
   ): TemplateResult {
     if (!series || series.length === 0) return html``;
 
-    const hoverIdx = this._roomHoverIndices[roomIdx] ?? null;
-    const hoveredPoint = hoverIdx !== null && series[hoverIdx] ? series[hoverIdx] : null;
+    const historyHours = this.config.history_hours ?? DEFAULT_HISTORY_HOURS;
+    const showHistory = this.config.show_history ?? DEFAULT_SHOW_HISTORY;
 
-    const roomTemps = series.map((s) => s.predictedRoomTemp);
-    const outdoorTemps = series.map((s) => s.outdoorTemp);
+    interface RoomGraphItem {
+      datetime: string;
+      date: Date;
+      dateMs: number;
+      predictedRoomTemp: number;
+      outdoorTemp: number;
+      canVentilate: boolean;
+      isHistory?: boolean;
+    }
+
+    const items: RoomGraphItem[] = [];
+    const now = new Date();
+    const nowMs = now.getTime();
+    const historyStartMs = nowMs - historyHours * 3600 * 1000;
+
+    const roomEntity = room?.temperature;
+    const outdoorEntity = room?.outdoor_temperature_override || this.config.outdoor_temperature;
+
+    if (showHistory && roomEntity && this._historyData[roomEntity]) {
+      const roomHist = this._historyData[roomEntity] || [];
+      const outdoorHist = outdoorEntity ? (this._historyData[outdoorEntity] || []) : [];
+
+      for (const rPt of roomHist) {
+        const rDate = toDate(rPt.date || rPt.datetime);
+        const rMs = rDate.getTime();
+        if (!isNaN(rMs) && rMs >= historyStartMs && rMs <= nowMs) {
+          let outTemp = outdoorHist[0]?.state ?? rPt.state;
+          if (outdoorHist.length > 0) {
+            let minDiff = Infinity;
+            for (const oPt of outdoorHist) {
+              const oMs = toDate(oPt.date || oPt.datetime).getTime();
+              const diff = Math.abs(oMs - rMs);
+              if (diff < minDiff) {
+                minDiff = diff;
+                outTemp = oPt.state;
+              }
+            }
+          }
+          items.push({
+            datetime: rPt.datetime,
+            date: rDate,
+            dateMs: rMs,
+            predictedRoomTemp: rPt.state,
+            outdoorTemp: outTemp,
+            canVentilate: false,
+            isHistory: true,
+          });
+        }
+      }
+    }
+
+    for (const s of series) {
+      const sDate = toDate(s.date || s.datetime);
+      const sMs = sDate.getTime();
+      if (!isNaN(sMs) && (!showHistory || sMs >= historyStartMs)) {
+        items.push({
+          datetime: s.datetime,
+          date: sDate,
+          dateMs: sMs,
+          predictedRoomTemp: s.predictedRoomTemp,
+          outdoorTemp: s.outdoorTemp,
+          canVentilate: s.canVentilate,
+          isHistory: false,
+        });
+      }
+    }
+
+    items.sort((a, b) => a.dateMs - b.dateMs);
+
+    if (items.length === 0) return html``;
+
+    const roomTemps = items.map((s) => s.predictedRoomTemp);
+    const outdoorTemps = items.map((s) => s.outdoorTemp);
     const allTemps = [...roomTemps, ...outdoorTemps];
     const rawMin = Math.min(...allTemps);
     const rawMax = Math.max(...allTemps);
@@ -845,76 +1091,138 @@ export class VentilationCard extends LitElement {
     const marginBottom = 10;
     const usableHeight = height - marginTop - marginBottom;
 
-    const N = series.length;
-    const points = series.map((item, i) => {
-      const x = N > 1 ? (i / (N - 1)) * width : width / 2;
+    const tMin = items[0].dateMs;
+    const tMax = items[items.length - 1].dateMs;
+    const tRange = tMax - tMin || 1;
+
+    const points = items.map((item) => {
+      const x = (item.dateMs - tMin) / tRange * width;
       const roomNorm = (item.predictedRoomTemp - minTemp) / tempRange;
       const roomY = height - marginBottom - roomNorm * usableHeight;
       const outdoorNorm = (item.outdoorTemp - minTemp) / tempRange;
       const outdoorY = height - marginBottom - outdoorNorm * usableHeight;
-      return { x, roomY, outdoorY, item };
+      return { x, roomY, outdoorY, dateMs: item.dateMs, item };
     });
 
-    let roomPath = `M ${points[0].x.toFixed(1)},${points[0].roomY.toFixed(1)}`;
-    let outdoorPath = `M ${points[0].x.toFixed(1)},${points[0].outdoorY.toFixed(1)}`;
+    const nowX = (nowMs - tMin) / tRange * width;
+    const hasHistoryPoints = items.some((i) => i.isHistory);
 
-    for (let i = 0; i < points.length - 1; i++) {
-      const p0 = points[i];
-      const p1 = points[i + 1];
+    const roomPts = points.map((p) => ({ x: p.x, y: p.roomY, dateMs: p.dateMs }));
+    const outdoorPts = points.map((p) => ({ x: p.x, y: p.outdoorY, dateMs: p.dateMs }));
 
-      const cp1x = p0.x + (p1.x - p0.x) / 3;
-      const cp2x = p0.x + 2 * (p1.x - p0.x) / 3;
+    const { pastPts: pastRoomPts, futurePts: futureRoomPts } = splitPointsByTime(roomPts, nowMs);
+    const { pastPts: pastOutdoorPts, futurePts: futureOutdoorPts } = splitPointsByTime(outdoorPts, nowMs);
 
-      roomPath += ` C ${cp1x.toFixed(1)},${p0.roomY.toFixed(1)} ${cp2x.toFixed(1)},${p1.roomY.toFixed(1)} ${p1.x.toFixed(1)},${p1.roomY.toFixed(1)}`;
-      outdoorPath += ` C ${cp1x.toFixed(1)},${p0.outdoorY.toFixed(1)} ${cp2x.toFixed(1)},${p1.outdoorY.toFixed(1)} ${p1.x.toFixed(1)},${p1.outdoorY.toFixed(1)}`;
-    }
+    const pastRoomPath = buildSplinePath(pastRoomPts);
+    const futureRoomPath = buildSplinePath(futureRoomPts);
+    const fullRoomPath = buildSplinePath(roomPts);
+
+    const pastOutdoorPath = buildSplinePath(pastOutdoorPts);
+    const futureOutdoorPath = buildSplinePath(futureOutdoorPts);
+    const fullOutdoorPath = buildSplinePath(outdoorPts);
+
+    const isPointInOpenZone = (p: { item: RoomGraphItem }) => {
+      if (p.item.canVentilate) return true;
+      if (p.item.outdoorTemp <= p.item.predictedRoomTemp + 0.1) return true;
+      if (forecastWindow?.upcomingWindows?.length) {
+        const t = p.item.dateMs;
+        return forecastWindow.upcomingWindows.some((w) => {
+          const wStart = toDate(w.start).getTime();
+          const wEnd = toDate(w.end).getTime();
+          return t >= wStart && t <= wEnd;
+        });
+      }
+      return false;
+    };
 
     const openBands: Array<{ startX: number; endX: number }> = [];
-    let bandStart: number | null = null;
+    let bandStartIdx: number | null = null;
 
     for (let i = 0; i < points.length; i++) {
-      const p = points[i];
-      if (p.item.canVentilate) {
-        if (bandStart === null) bandStart = p.x;
-        if (i === points.length - 1 && bandStart !== null) {
-          openBands.push({ startX: bandStart, endX: p.x });
+      const isOpen = isPointInOpenZone(points[i]);
+      if (isOpen) {
+        if (bandStartIdx === null) bandStartIdx = i;
+        if (i === points.length - 1 && bandStartIdx !== null) {
+          const startX = points[bandStartIdx].x;
+          const endX = points[i].x;
+          openBands.push({ startX, endX });
         }
       } else {
-        if (bandStart !== null) {
-          openBands.push({ startX: bandStart, endX: p.x });
-          bandStart = null;
+        if (bandStartIdx !== null) {
+          const startX = points[bandStartIdx].x;
+          const endX = points[i].x;
+          openBands.push({ startX, endX });
+          bandStartIdx = null;
         }
       }
     }
 
-    const step = Math.max(1, Math.floor(N / 4));
-    const timeLabels = points
-      .filter((_, idx) => idx % step === 0 || idx === N - 1)
-      .map((p) => {
-        const d = new Date(p.item.datetime);
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      });
+    if (forecastWindow?.upcomingWindows?.length && points.length > 1) {
+      const tStart = points[0].dateMs;
+      const tEnd = points[points.length - 1].dateMs;
+      const totalTime = tEnd - tStart;
 
-    const activePoint = hoveredPoint ? points[hoverIdx!] : null;
+      if (totalTime > 0) {
+        for (const w of forecastWindow.upcomingWindows) {
+          const wStartMs = toDate(w.start).getTime();
+          const wEndMs = toDate(w.end).getTime();
+
+          if (wEndMs > tStart && wStartMs < tEnd) {
+            const startRatio = Math.max(0, (wStartMs - tStart) / totalTime);
+            const endRatio = Math.min(1, (wEndMs - tStart) / totalTime);
+            const startX = startRatio * width;
+            const endX = endRatio * width;
+            if (endX > startX) {
+              openBands.push({ startX, endX });
+            }
+          }
+        }
+      }
+    }
+
+    const mergedBands: Array<{ startX: number; endX: number }> = [];
+    openBands.sort((a, b) => a.startX - b.startX);
+
+    for (const b of openBands) {
+      if (mergedBands.length === 0) {
+        mergedBands.push({ ...b });
+      } else {
+        const last = mergedBands[mergedBands.length - 1];
+        if (b.startX <= last.endX + 5) {
+          last.endX = Math.max(last.endX, b.endX);
+        } else {
+          mergedBands.push({ ...b });
+        }
+      }
+    }
+
+    const step = Math.max(1, Math.floor(points.length / 4));
+    const timeLabels = points
+      .filter((_, idx) => idx % step === 0 || idx === points.length - 1)
+      .map((p) => p.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+
+    const hoverIdx = this._roomHoverIndices[roomIdx] ?? null;
+    const hoveredPoint = hoverIdx !== null && points[hoverIdx] ? points[hoverIdx] : null;
+    const activePoint = hoveredPoint;
 
     return html`
       <div class="prediction-graph-card">
         <div class="prediction-legend">
           <div class="legend-item">
             <span class="legend-color predicted-room"></span>
-            <span>Room (Pred): ${hoveredPoint ? `${hoveredPoint.predictedRoomTemp.toFixed(1)}°C` : `${roomTemps[0]?.toFixed(1)}°C`}</span>
+            <span>Room: ${hoveredPoint ? `${hoveredPoint.item.predictedRoomTemp.toFixed(1)}°C` : `${roomTemps[roomTemps.length - 1]?.toFixed(1)}°C`}</span>
           </div>
           <div class="legend-item">
             <span class="legend-color outdoor-reference"></span>
-            <span>Outdoor: ${hoveredPoint ? `${hoveredPoint.outdoorTemp.toFixed(1)}°C` : `${outdoorTemps[0]?.toFixed(1)}°C`}</span>
+            <span>Outdoor: ${hoveredPoint ? `${hoveredPoint.item.outdoorTemp.toFixed(1)}°C` : `${outdoorTemps[outdoorTemps.length - 1]?.toFixed(1)}°C`}</span>
           </div>
           <div class="legend-item">
             <span class="legend-color openable-zone"></span>
             <span>Open Zone</span>
           </div>
           ${hoveredPoint
-            ? html`<span class="hover-time-tag">${new Date(hoveredPoint.datetime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`
-            : nothing}
+        ? html`<span class="hover-time-tag">${hoveredPoint.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${hoveredPoint.item.isHistory ? ' (Hist)' : ''}</span>`
+        : nothing}
         </div>
 
         <div class="graph-svg-wrapper">
@@ -922,18 +1230,18 @@ export class VentilationCard extends LitElement {
             viewBox="0 0 ${width} ${height}"
             preserveAspectRatio="none"
             class="prediction-svg-chart"
-            @mousemove=${(e: MouseEvent) => this._handleRoomMouseMove(e, roomIdx, points.length)}
+            @mousemove=${(e: MouseEvent) => this._handleRoomMouseMove(e, roomIdx, points)}
             @mouseleave=${() => this._handleRoomMouseLeave(roomIdx)}
             @touchmove=${(e: TouchEvent) => {
-              if (e.touches.length > 0) {
-                const touch = e.touches[0];
-                this._handleRoomMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, roomIdx, points.length);
-              }
-            }}
+        if (e.touches.length > 0) {
+          const touch = e.touches[0];
+          this._handleRoomMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, roomIdx, points);
+        }
+      }}
             @touchend=${() => this._handleRoomMouseLeave(roomIdx)}
           >
-            ${openBands.map(
-              (b) => html`
+            ${mergedBands.map(
+        (b) => svg`
                 <rect
                   x="${b.startX.toFixed(1)}"
                   y="0"
@@ -941,30 +1249,105 @@ export class VentilationCard extends LitElement {
                   height="${height}"
                   class="openable-zone-band"
                   rx="3"
+                  style="fill: rgba(16, 185, 129, 0.25); stroke: rgba(16, 185, 129, 0.6); stroke-width: 1.5px;"
                 />
               `,
-            )}
+      )}
 
-            <path
-              d="${outdoorPath}"
-              fill="none"
-              stroke="var(--primary-color, #2196f3)"
-              stroke-width="1.8"
-              stroke-dasharray="4 3"
-              opacity="0.7"
-            />
+            ${pastOutdoorPath
+        ? svg`
+                  <path
+                    d="${pastOutdoorPath}"
+                    fill="none"
+                    stroke="var(--primary-color, #2196f3)"
+                    stroke-width="1.8"
+                    opacity="0.85"
+                  />
+                `
+        : nothing}
 
-            <path
-              d="${roomPath}"
-              fill="none"
-              stroke="var(--vc-green, #10b981)"
-              stroke-width="2.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
+            ${futureOutdoorPath
+        ? svg`
+                  <path
+                    d="${futureOutdoorPath}"
+                    fill="none"
+                    stroke="var(--primary-color, #2196f3)"
+                    stroke-width="1.8"
+                    stroke-dasharray="4 3"
+                    opacity="0.7"
+                  />
+                `
+        : nothing}
+
+            ${!pastOutdoorPath && !futureOutdoorPath && fullOutdoorPath
+        ? svg`
+                  <path
+                    d="${fullOutdoorPath}"
+                    fill="none"
+                    stroke="var(--primary-color, #2196f3)"
+                    stroke-width="1.8"
+                    stroke-dasharray="4 3"
+                    opacity="0.7"
+                  />
+                `
+        : nothing}
+
+            ${pastRoomPath
+        ? svg`
+                  <path
+                    d="${pastRoomPath}"
+                    fill="none"
+                    stroke="var(--vc-green, #10b981)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+                `
+        : nothing}
+
+            ${futureRoomPath
+        ? svg`
+                  <path
+                    d="${futureRoomPath}"
+                    fill="none"
+                    stroke="var(--vc-green, #10b981)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-dasharray="4 3"
+                  />
+                `
+        : nothing}
+
+            ${!pastRoomPath && !futureRoomPath && fullRoomPath
+        ? svg`
+                  <path
+                    d="${fullRoomPath}"
+                    fill="none"
+                    stroke="var(--vc-green, #10b981)"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-dasharray="4 3"
+                  />
+                `
+        : nothing}
+
+            ${hasHistoryPoints && nowX > 0 && nowX < width
+        ? svg`
+                  <line
+                    x1="${nowX.toFixed(1)}"
+                    y1="0"
+                    x2="${nowX.toFixed(1)}"
+                    y2="${height}"
+                    class="now-divider-line"
+                  />
+                  <text x="${nowX.toFixed(1)}" y="12" class="now-divider-label">NOW</text>
+                `
+        : nothing}
 
             ${activePoint
-              ? html`
+        ? svg`
                   <line
                     x1="${activePoint.x.toFixed(1)}"
                     y1="0"
@@ -987,7 +1370,7 @@ export class VentilationCard extends LitElement {
                     stroke="var(--primary-color, #2196f3)"
                   />
                 `
-              : nothing}
+        : nothing}
           </svg>
         </div>
 
@@ -1021,13 +1404,9 @@ export class VentilationCard extends LitElement {
         @click=${() => this._handleMoreInfo(weatherEntity)}
         title="${weatherEntity ? `View weather forecast for ${weatherEntity}` : ''}"
       >
-        <div class="windows-header">
-          <ha-icon icon="mdi:calendar-clock"></ha-icon>
-          <span>Upcoming Ventilation Windows</span>
-        </div>
         <div class="windows-list">
           ${windows.map(
-            (win) => html`
+      (win) => html`
               <div class="window-row ${win.isCurrent ? 'active-window' : ''}">
                 <div class="window-time-range">
                   <span class="start-time">${win.formattedStart}</span>
@@ -1036,12 +1415,12 @@ export class VentilationCard extends LitElement {
                 </div>
                 <div class="window-badge-meta">
                   ${win.isCurrent
-                    ? html`<span class="active-tag"><ha-icon icon="mdi:check-circle"></ha-icon> Active Now</span>`
-                    : html`<span class="duration-tag"><ha-icon icon="mdi:clock-outline"></ha-icon> ${win.durationHours}h</span>`}
+          ? html`<span class="active-tag"><ha-icon icon="mdi:check-circle"></ha-icon> Active Now</span>`
+          : html`<span class="duration-tag"><ha-icon icon="mdi:clock-outline"></ha-icon> ${win.durationHours}h</span>`}
                 </div>
               </div>
             `,
-          )}
+    )}
         </div>
       </div>
     `;
@@ -1068,11 +1447,11 @@ export class VentilationCard extends LitElement {
       <span
         class="window-badge ${badgeClass} ${windowEntity ? 'clickable' : ''}"
         @click=${(e: Event) => {
-          if (windowEntity) {
-            e.stopPropagation();
-            this._handleMoreInfo(windowEntity);
-          }
-        }}
+        if (windowEntity) {
+          e.stopPropagation();
+          this._handleMoreInfo(windowEntity);
+        }
+      }}
         title="${windowEntity ? `View history graph for ${windowEntity}` : ''}"
       >
         <ha-icon icon="${windowIcon}"></ha-icon>
@@ -1080,6 +1459,40 @@ export class VentilationCard extends LitElement {
         ${isCorrect === true ? html`<ha-icon icon="mdi:check"></ha-icon>` : nothing}
         ${isCorrect === false ? html`<ha-icon icon="mdi:alert"></ha-icon>` : nothing}
       </span>
+    `;
+  }
+
+  private _renderSuggestionBadge(advice: RoomAdvice): TemplateResult {
+    const showNextState = this.config.show_next_state_change !== false;
+    const nextState = showNextState ? advice.nextStateChange : null;
+
+    if (nextState) {
+      const isOpen = nextState.targetState === 'open';
+      const label = isOpen
+        ? localize('forecast.next_state_open', { time: nextState.formattedTime })
+        : localize('forecast.next_state_closed', { time: nextState.formattedTime });
+      const icon = isOpen ? 'mdi:window-open-variant' : 'mdi:window-closed-variant';
+      const badgeClass = isOpen ? 'to-open' : 'to-closed';
+
+      return html`
+        <div
+          class="suggestion-badge ${badgeClass}"
+          title="Time to next state change (${nextState.targetState})"
+        >
+          <ha-icon icon="${icon}"></ha-icon>
+          <span class="suggestion-text">${label}</span>
+        </div>
+      `;
+    }
+
+    const icon = this._getStatusIcon(advice.status);
+    const label = localize(`status.${advice.status}`);
+
+    return html`
+      <div class="suggestion-badge status-${advice.status}">
+        <ha-icon icon="${icon}"></ha-icon>
+        <span class="suggestion-text">${label}</span>
+      </div>
     `;
   }
 
@@ -1383,4 +1796,73 @@ export class VentilationCard extends LitElement {
 // Fallback registration
 if (!customElements.get('ventilation-card')) {
   customElements.define('ventilation-card', VentilationCard);
+}
+
+function toDate(val: any): Date {
+  if (val instanceof Date) return val;
+  if (typeof val === 'number') return new Date(val);
+  if (typeof val === 'string') return new Date(val);
+  return new Date();
+}
+
+function buildSplinePath(pts: Array<{ x: number; y: number }>): string {
+  if (!pts || pts.length < 2) return '';
+
+  let path = `M ${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i];
+    const p1 = pts[i + 1];
+    const cp1x = p0.x + (p1.x - p0.x) / 3;
+    const cp1y = p0.y;
+    const cp2x = p0.x + 2 * (p1.x - p0.x) / 3;
+    const cp2y = p1.y;
+    path += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)}`;
+  }
+  return path;
+}
+
+function splitPointsByTime<T extends { x: number; y: number; dateMs: number }>(
+  points: T[],
+  nowMs: number,
+): { pastPts: T[]; futurePts: T[] } {
+  if (!points || points.length === 0) {
+    return { pastPts: [], futurePts: [] };
+  }
+
+  const pastPts = points.filter((p) => p.dateMs <= nowMs);
+  const futurePts = points.filter((p) => p.dateMs >= nowMs);
+
+  if (pastPts.length === 0) {
+    return { pastPts: [], futurePts: points };
+  }
+
+  if (futurePts.length === 0) {
+    return { pastPts: points, futurePts: [] };
+  }
+
+  // If the last past point and first future point are the same (exactly at now), no interpolation needed
+  if (pastPts[pastPts.length - 1] === futurePts[0]) {
+    return { pastPts, futurePts };
+  }
+
+  // Interpolate a synthetic point at exactly nowMs so both paths meet at the NOW divider
+  const lastPast = pastPts[pastPts.length - 1];
+  const firstFuture = futurePts[0];
+  const tRange = firstFuture.dateMs - lastPast.dateMs;
+
+  if (tRange > 0) {
+    const t = (nowMs - lastPast.dateMs) / tRange;
+    const nowPoint = {
+      ...lastPast,
+      x: lastPast.x + (firstFuture.x - lastPast.x) * t,
+      y: lastPast.y + (firstFuture.y - lastPast.y) * t,
+      dateMs: nowMs,
+    };
+    pastPts.push(nowPoint);
+    futurePts.unshift(nowPoint);
+  } else {
+    pastPts.push(futurePts[0]);
+  }
+
+  return { pastPts, futurePts };
 }
