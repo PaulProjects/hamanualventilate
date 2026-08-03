@@ -42,10 +42,8 @@ export interface VentilationCardConfig extends LovelaceCardConfig {
   ah_threshold?: number;             // absolute humidity threshold (g/m³), default 2
   rooms: RoomConfig[];
   // Visual options
-  show_values?: boolean;             // display numerical sensor values (default: true)
   show_absolute_humidity?: boolean;  // display absolute humidity g/m³ (default: true)
   show_forecast?: boolean;           // display forecast window predictions (default: true)
-  show_inline_forecast?: boolean;    // display full forecast expanded inline instead of modal (default: false)
   show_history?: boolean;            // display historical data in graph (default: false)
   history_hours?: number;            // hours of history to display (default: 24)
   forecast_hours?: number;           // hours of forecast to display (default: 24)

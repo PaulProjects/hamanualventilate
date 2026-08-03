@@ -76,10 +76,8 @@ export class VentilationCard extends LitElement {
     this.config = {
       ah_threshold: DEFAULT_AH_THRESHOLD,
       balanced_max_temperature: DEFAULT_BALANCED_MAX_TEMP,
-      show_values: true,
       show_absolute_humidity: true,
       show_forecast: true,
-      show_inline_forecast: false,
       show_history: DEFAULT_SHOW_HISTORY,
       history_hours: DEFAULT_HISTORY_HOURS,
       forecast_hours: DEFAULT_FORECAST_HOURS,
@@ -221,15 +219,12 @@ export class VentilationCard extends LitElement {
         ),
       );
 
-      const goalLabel = localize(`goal.${this.config.goal}`);
-      const title = this.config.title || localize('card.title_default');
-
       return html`
         <ha-card>
           <div class="card-header-row">
             <div class="card-header-title">
               <ha-icon icon="mdi:air-filter" class="header-icon"></ha-icon>
-              <span>${this.config.title || localize('card.title')}</span>
+              <span>${this.config.title || localize('card.title_default')}</span>
             </div>
             ${this._renderGoalBadge()}
           </div>
@@ -313,8 +308,7 @@ export class VentilationCard extends LitElement {
     `;
   }
 
-  private _handleOutdoorMouseMove(e: MouseEvent, points: Array<{ x: number }>): void {
-    if (!points || points.length === 0) return;
+  private _findClosestPointIndex(e: MouseEvent, points: Array<{ x: number }>): number {
     const svg = e.currentTarget as SVGElement;
     const rect = svg.getBoundingClientRect();
     const x = e.clientX - rect.left;
@@ -330,6 +324,12 @@ export class VentilationCard extends LitElement {
         closestIdx = i;
       }
     }
+    return closestIdx;
+  }
+
+  private _handleOutdoorMouseMove(e: MouseEvent, points: Array<{ x: number }>): void {
+    if (!points || points.length === 0) return;
+    const closestIdx = this._findClosestPointIndex(e, points);
     if (this._outdoorHoverIndex !== closestIdx) {
       this._outdoorHoverIndex = closestIdx;
     }
@@ -343,21 +343,7 @@ export class VentilationCard extends LitElement {
 
   private _handleRoomMouseMove(e: MouseEvent, roomIdx: number, points: Array<{ x: number }>): void {
     if (!points || points.length === 0) return;
-    const svg = e.currentTarget as SVGElement;
-    const rect = svg.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const targetX = ratio * 500;
-
-    let closestIdx = 0;
-    let minDiff = Infinity;
-    for (let i = 0; i < points.length; i++) {
-      const diff = Math.abs(points[i].x - targetX);
-      if (diff < minDiff) {
-        minDiff = diff;
-        closestIdx = i;
-      }
-    }
+    const closestIdx = this._findClosestPointIndex(e, points);
     if (this._roomHoverIndices[roomIdx] !== closestIdx) {
       this._roomHoverIndices = { ...this._roomHoverIndices, [roomIdx]: closestIdx };
     }
@@ -710,7 +696,7 @@ export class VentilationCard extends LitElement {
                     y2="${height}"
                     class="now-divider-line"
                   />
-                  <text x="${nowX.toFixed(1)}" y="12" class="now-divider-label">NOW</text>
+                  
                 `
         : nothing}
 
@@ -1342,7 +1328,6 @@ export class VentilationCard extends LitElement {
                     y2="${height}"
                     class="now-divider-line"
                   />
-                  <text x="${nowX.toFixed(1)}" y="12" class="now-divider-label">NOW</text>
                 `
         : nothing}
 
@@ -1686,32 +1671,6 @@ export class VentilationCard extends LitElement {
     }
   }
 
-  private _getOutdoorTemperature(): number | null {
-    if (this.config.outdoor_temperature) {
-      return readSensor(this.hass, this.config.outdoor_temperature);
-    }
-    if (this.config.weather_entity) {
-      const weatherState = this.hass.states[this.config.weather_entity];
-      if (weatherState?.attributes?.temperature != null) {
-        return parseFloat(weatherState.attributes.temperature);
-      }
-    }
-    return null;
-  }
-
-  private _getOutdoorHumidity(): number | null {
-    if (this.config.outdoor_humidity) {
-      return readSensor(this.hass, this.config.outdoor_humidity);
-    }
-    if (this.config.weather_entity) {
-      const weatherState = this.hass.states[this.config.weather_entity];
-      if (weatherState?.attributes?.humidity != null) {
-        return parseFloat(weatherState.attributes.humidity);
-      }
-    }
-    return null;
-  }
-
   private _getTrackedEntities(): string[] {
     const entities: string[] = [];
 
@@ -1791,11 +1750,6 @@ export class VentilationCard extends LitElement {
     const rows = 2 + (this.config?.rooms?.length || 1) * 2;
     return { rows, columns: 6, min_rows: 3, max_rows: rows + 4 };
   }
-}
-
-// Fallback registration
-if (!customElements.get('ventilation-card')) {
-  customElements.define('ventilation-card', VentilationCard);
 }
 
 function toDate(val: any): Date {

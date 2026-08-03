@@ -51,15 +51,6 @@
     "next_state_open": "Open in {time}",
     "next_state_closed": "Closed in {time}"
   },
-  "modal": {
-    "details_title": "Room Climate & Ventilation Details",
-    "climate_comparison": "Indoor vs. Outdoor Climate",
-    "indoor": "Indoor",
-    "outdoor": "Outdoor",
-    "delta": "Delta",
-    "upcoming_windows": "Upcoming Ventilation Schedule",
-    "close": "Close"
-  },
   "window": {
     "open": "Open",
     "closed": "Closed",
@@ -82,10 +73,8 @@
     "min_humidity": "Min. Humidity (%)",
     "max_humidity": "Max. Humidity (%)",
     "ah_threshold": "AH Threshold (g/m³)",
-    "show_values": "Display Sensor Values",
     "show_absolute_humidity": "Display Absolute Humidity (g/m³)",
     "show_forecast": "Display Forecast Summary",
-    "show_inline_forecast": "Expand Forecast Inline (legacy)",
     "show_history": "Display Sensor History in Graph",
     "history_hours": "History Duration (Hours)",
     "show_next_state_change": "Show Time to Next State Change",
@@ -107,7 +96,6 @@
     "outdoor_humidity_override": "Custom Outdoor Humidity Sensor",
     "max_temp_override": "Max Temperature Override (°C)",
     "max_humidity_override": "Max Humidity Override (%)",
-    "min_humidity_override": "Min Humidity Override (%)",
-    "remove_room": "Remove"
+    "min_humidity_override": "Min Humidity Override (%)"
   }
 }

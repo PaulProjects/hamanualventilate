@@ -17,7 +17,6 @@ export const cardStyles = css`
     overflow: hidden;
   }
 
-  .card-header,
   .card-header-row {
     display: flex;
     align-items: center;
@@ -25,7 +24,6 @@ export const cardStyles = css`
     padding: var(--vc-spacing) var(--vc-spacing) 0 var(--vc-spacing);
   }
 
-  .card-header .title,
   .card-header-title {
     font-size: 16px;
     font-weight: 600;
@@ -35,17 +33,9 @@ export const cardStyles = css`
     gap: 8px;
   }
 
-  .card-header .title ha-icon,
-  .card-header-title ha-icon,
   .card-header-title .header-icon {
     color: var(--primary-color);
     --mdc-icon-size: 20px;
-  }
-
-  .header-badges {
-    display: flex;
-    align-items: center;
-    gap: 6px;
   }
 
   .goal-badge {
@@ -63,112 +53,7 @@ export const cardStyles = css`
     border: 1px solid color-mix(in srgb, var(--primary-color) 30%, transparent);
   }
 
-  /* Top Right Warning / Health Badge with Hover Tooltip */
-  .warning-badge-wrapper {
-    position: relative;
-    display: inline-flex;
-  }
-
-  .warning-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 3px 8px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--vc-yellow) 20%, transparent);
-    color: var(--vc-yellow);
-    cursor: help;
-    border: 1px solid color-mix(in srgb, var(--vc-yellow) 40%, transparent);
-    transition: all 0.2s ease;
-  }
-
-  .warning-badge-wrapper:hover .warning-badge {
-    background: color-mix(in srgb, var(--vc-yellow) 35%, transparent);
-  }
-
-  .warning-badge ha-icon {
-    --mdc-icon-size: 14px;
-  }
-
-  .warning-tooltip {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    width: max-content;
-    max-width: 320px;
-    white-space: normal;
-    background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
-    color: var(--primary-text-color, #fff);
-    border: 1px solid color-mix(in srgb, var(--vc-yellow) 40%, transparent);
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
-    padding: 10px 12px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 400;
-    line-height: 1.4;
-    z-index: 100;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(-4px);
-    transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-    pointer-events: none;
-  }
-
-  .warning-badge-wrapper:hover .warning-tooltip,
-  .warning-badge-wrapper:focus-within .warning-tooltip {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
-  }
-
-  .warning-tooltip-title {
-    font-weight: 600;
-    color: var(--vc-yellow);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 6px;
-    font-size: 12px;
-  }
-
-  .warning-tooltip-title ha-icon {
-    --mdc-icon-size: 16px;
-  }
-
-  .warning-issue-list {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .warning-issue-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    font-size: 11px;
-    color: var(--primary-text-color);
-  }
-
-  .warning-issue-item ha-icon {
-    --mdc-icon-size: 14px;
-    flex-shrink: 0;
-    margin-top: 1px;
-  }
-
-  .warning-issue-item.severity-error {
-    color: var(--vc-red, #ff5252);
-  }
-
-  .warning-issue-item.severity-warning {
-    color: var(--vc-yellow, #e6a23c);
-  }
-
-  /* Diagnostics Banner */
+  /* ── Diagnostics Banner ──────────────────────────────────── */
   .health-banner {
     background: color-mix(in srgb, var(--vc-yellow) 10%, var(--secondary-background-color));
     border: 1px solid color-mix(in srgb, var(--vc-yellow) 30%, transparent);
@@ -218,52 +103,52 @@ export const cardStyles = css`
     padding: 12px var(--vc-spacing) var(--vc-spacing) var(--vc-spacing);
   }
 
-  /* ── Outdoor section (Flat & Unboxed) ───────────────────────── */
+  /* ── Outdoor section ──────────────────────────────────────── */
   .outdoor-section {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding: 4px 0 14px 0;
-    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
-    margin-bottom: 4px;
+    padding: 4px 0 12px 0;
+    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
+    margin-bottom: var(--vc-spacing);
   }
 
   .outdoor-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
     cursor: pointer;
+    user-select: none;
+    padding: 4px 0;
   }
 
   .outdoor-title-group {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     min-width: 0;
   }
 
   .outdoor-icon-avatar {
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    background: color-mix(in srgb, var(--vc-blue, #2196f3) 14%, transparent);
-    color: var(--vc-blue, #2196f3);
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    color: var(--primary-color);
   }
 
   .outdoor-icon-avatar ha-icon {
-    --mdc-icon-size: 17px;
+    --mdc-icon-size: 18px;
   }
 
   .outdoor-name {
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
-    letter-spacing: 0.5px;
-    color: var(--secondary-text-color);
+    color: var(--primary-text-color);
   }
 
   .outdoor-weather-badge {
@@ -349,8 +234,6 @@ export const cardStyles = css`
   .outdoor-expanded-panel {
     margin-top: 8px;
     margin-left: 0;
-    padding-top: 0;
-    border-top: none;
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -358,13 +241,10 @@ export const cardStyles = css`
     animation: vc-slide-down 0.18s ease-out;
   }
 
-  /* ── Integrated Home Assistant Style Sparkline Line Graph ──────── */
+  /* ── Integrated Graph Card & Sparkline ─────────────────────── */
   .integrated-graph-card {
     position: relative;
     background: transparent;
-    border: none;
-    box-shadow: none;
-    border-radius: 0;
     padding: 6px 0;
     display: flex;
     flex-direction: column;
@@ -451,63 +331,26 @@ export const cardStyles = css`
     padding: 6px 0;
   }
 
-  .outdoor-values {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 16px;
-    font-size: 13px;
-    color: var(--primary-text-color);
-    padding: 2px 0 0 36px;
-  }
-
-  .outdoor-values .sensor-value {
-    display: flex;
-    align-items: baseline;
-    gap: 3px;
-    white-space: nowrap;
-    padding: 2px 6px;
-    border-radius: 4px;
-    transition: background-color 0.15s ease;
-  }
-
-  .outdoor-values .sensor-value ha-icon {
-    --mdc-icon-size: 15px;
-    color: var(--secondary-text-color);
-    opacity: 0.8;
-    align-self: center;
-  }
-
-  .outdoor-values .value {
-    font-weight: 600;
-    font-size: 14px;
-  }
-
-  .outdoor-values .unit {
-    font-size: 11px;
-    color: var(--secondary-text-color);
-    font-weight: 400;
-  }
-
-  /* ── Room rows (Flat List with Dividers) ────────────────────── */
-  .room-list {
+  /* ── Rooms Container & Rows ────────────────────────────────── */
+  .rooms-container {
     display: flex;
     flex-direction: column;
   }
 
   .room-row {
-    padding: 14px 0;
+    padding: 12px 0;
     display: flex;
     flex-direction: column;
     gap: 8px;
     position: relative;
+    cursor: pointer;
     border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
     transition: background-color 0.15s ease;
   }
 
   .room-row:last-child {
     border-bottom: none;
-    padding-bottom: 4px;
+    padding-bottom: 0;
   }
 
   .room-header {
@@ -621,143 +464,6 @@ export const cardStyles = css`
     color: var(--vc-yellow);
   }
 
-  /* ── Room Stats (Unboxed & Clean) ──────────────────────────── */
-  .room-values {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 16px;
-    font-size: 13px;
-    color: var(--primary-text-color);
-    padding: 0 0 0 42px;
-  }
-
-  .room-values .sensor-value {
-    display: flex;
-    align-items: baseline;
-    gap: 3px;
-    white-space: nowrap;
-    padding: 2px 6px;
-    border-radius: 4px;
-    transition: background-color 0.15s ease;
-  }
-
-  .room-values .sensor-value ha-icon {
-    --mdc-icon-size: 15px;
-    color: var(--secondary-text-color);
-    opacity: 0.85;
-    align-self: center;
-  }
-
-  .room-values .value {
-    font-weight: 600;
-    font-size: 14px;
-  }
-
-  .room-values .unit {
-    font-size: 11px;
-    color: var(--secondary-text-color);
-    font-weight: 400;
-  }
-
-  /* Custom outdoor for this room */
-  .room-outdoor {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--secondary-text-color);
-    margin-left: 0;
-  }
-
-  .room-outdoor ha-icon {
-    --mdc-icon-size: 13px;
-  }
-
-  /* Info Icon Tooltip */
-  .info-icon-wrapper {
-    position: relative;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    padding: 1px;
-    border-radius: 4px;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-
-  .info-icon {
-    --mdc-icon-size: 16px;
-    color: inherit;
-    opacity: 0.85;
-    transition: opacity 0.2s ease, transform 0.2s ease;
-  }
-
-  .info-icon-wrapper:hover .info-icon,
-  .info-icon-wrapper:focus .info-icon,
-  .info-icon-wrapper:active .info-icon {
-    opacity: 1;
-    transform: scale(1.15);
-  }
-
-  .info-tooltip {
-    position: absolute;
-    top: calc(100% + 8px);
-    right: 0;
-    width: max-content;
-    max-width: 260px;
-    white-space: normal;
-    background: var(--ha-card-background, var(--card-background-color, #1c1c1e));
-    color: var(--primary-text-color, #fff);
-    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.15));
-    padding: 6px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 400;
-    line-height: 1.35;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-    transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s ease;
-    transform: translateY(-4px);
-    z-index: 100;
-  }
-
-  .info-tooltip::after {
-    content: '';
-    position: absolute;
-    bottom: 100%;
-    right: 6px;
-    border-width: 5px;
-    border-style: solid;
-    border-color: transparent transparent var(--ha-card-background, var(--card-background-color, #1c1c1e)) transparent;
-  }
-
-  .info-icon-wrapper:hover .info-tooltip,
-  .info-icon-wrapper:focus .info-tooltip,
-  .info-icon-wrapper:focus-within .info-tooltip,
-  .info-icon-wrapper:active .info-tooltip {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
-  }
-
-  /* ── Forecast time hint ───────────────────────────────────── */
-  .room-forecast-hint {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--secondary-text-color);
-    margin-left: 0;
-  }
-
-  .room-forecast-hint ha-icon {
-    --mdc-icon-size: 14px;
-  }
-
   /* ── Window status ────────────────────────────────────────── */
   .window-badge {
     display: inline-flex;
@@ -796,53 +502,17 @@ export const cardStyles = css`
     opacity: 0.85;
   }
 
-  .sensor-value.clickable:hover {
-    background: color-mix(in srgb, var(--primary-color, #2196f3) 12%, transparent);
-  }
-
-  .room-title-group.clickable:hover {
-    opacity: 0.85;
-  }
-
-  .room-icon-avatar.clickable:hover {
-    transform: scale(1.06);
-  }
-
   .window-badge.clickable:hover {
     transform: scale(1.04);
   }
 
-  .suggestion-badge.clickable:hover {
-    transform: scale(1.04);
-  }
-
-  .outdoor-title-group.clickable:hover {
-    opacity: 0.85;
-  }
-
-  /* ── Upcoming Ventilation Windows (Clean & Integrated List) ─── */
+  /* ── Upcoming Ventilation Windows List ────────────────────── */
   .forecast-windows-section {
     margin-top: 6px;
     margin-left: 0;
     display: flex;
     flex-direction: column;
     gap: 6px;
-  }
-
-  .windows-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--secondary-text-color);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .windows-header ha-icon {
-    --mdc-icon-size: 14px;
-    color: var(--primary-color, #2196f3);
   }
 
   .windows-list {
@@ -1026,151 +696,10 @@ export const cardStyles = css`
     --mdc-icon-size: 16px;
   }
 
-  /* ── Subpage Navigation (Native HA In-Card Navigation) ──── */
-  .subpage-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: var(--vc-spacing) var(--vc-spacing) 12px var(--vc-spacing);
-    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.1));
-    gap: 12px;
-  }
-
-  .subpage-back-button {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-    color: var(--primary-text-color);
-    border: none;
-    padding: 6px 12px;
-    border-radius: 16px;
-    font-size: 13px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-
-  .subpage-back-button:hover {
-    background: color-mix(in srgb, var(--primary-color) 20%, transparent);
-    color: var(--primary-color);
-  }
-
-  .subpage-back-button ha-icon {
-    --mdc-icon-size: 18px;
-  }
-
-  .subpage-title-group {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-  }
-
-  .subpage-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--primary-text-color);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .subpage-content {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    padding-top: var(--vc-spacing);
-  }
-
-  .subpage-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .subpage-section-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--primary-text-color);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  .subpage-section-title ha-icon {
-    --mdc-icon-size: 16px;
-    color: var(--primary-color);
-  }
-
-  .suggestion-banner {
-    background: color-mix(in srgb, var(--primary-text-color) 5%, transparent);
-    border-radius: 12px;
-    padding: 12px 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
-  }
-
-  .suggestion-banner.status-ventilate_now {
-    background: color-mix(in srgb, var(--vc-green) 12%, transparent);
-    border-color: color-mix(in srgb, var(--vc-green) 30%, transparent);
-    color: var(--vc-green);
-  }
-
-  .suggestion-banner.status-do_not_ventilate {
-    background: color-mix(in srgb, var(--vc-red) 10%, transparent);
-    border-color: color-mix(in srgb, var(--vc-red) 25%, transparent);
-    color: var(--vc-red);
-  }
-
-  .suggestion-banner.status-caution {
-    background: color-mix(in srgb, var(--vc-yellow) 12%, transparent);
-    border-color: color-mix(in srgb, var(--vc-yellow) 30%, transparent);
-    color: var(--vc-yellow);
-  }
-
-  .suggestion-banner-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .suggestion-banner-header ha-icon {
-    --mdc-icon-size: 20px;
-  }
-
-  .suggestion-title {
-    font-size: 14px;
-    font-weight: 700;
-  }
-
-  .suggestion-reason {
-    font-size: 12px;
-    color: var(--primary-text-color);
-    opacity: 0.9;
-    line-height: 1.4;
-  }
-
-  /* ── Inline Expandable Room Panels (Clean & Unboxed) ─────── */
-  .room-row {
-    cursor: pointer;
-    transition: background 0.15s ease;
-    padding: 12px 0;
-    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
-  }
-
-  .room-row:last-child {
-    border-bottom: none;
-    padding-bottom: 0;
-  }
-
+  /* ── Inline Expandable Room Panels ────────────────────────── */
   .room-expanded-panel {
     margin-top: 8px;
     margin-left: 0;
-    padding-top: 0;
-    border-top: none;
     width: 100%;
     display: flex;
     flex-direction: column;
@@ -1205,75 +734,13 @@ export const cardStyles = css`
     flex-shrink: 0;
   }
 
-  .expanded-section-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--secondary-text-color);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-top: 4px;
-  }
-
-  .expanded-section-title ha-icon {
-    --mdc-icon-size: 14px;
-    color: var(--primary-color);
-  }
-
-  .room-values-block {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .room-values-block .block-label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--secondary-text-color);
-  }
-
-  .room-values-block .block-label ha-icon {
-    --mdc-icon-size: 15px;
-    color: var(--primary-color);
-  }
-
-  .room-expanded-panel .room-values {
-    padding-left: 0;
-  }
-
-  .room-expanded-panel .forecast-windows-section,
-  .room-expanded-panel .forecast-windows-empty {
-    margin-left: 0;
-  }
-
   /* ── Responsive ───────────────────────────────────────────── */
   @media (max-width: 400px) {
-    .outdoor-values,
-    .room-values {
-      gap: 10px;
-      padding-left: 0;
-    }
-
-    .room-outdoor,
-    .room-forecast-hint,
     .forecast-windows-section,
     .forecast-windows-empty,
     .compact-next-window-chip,
     .room-expanded-panel {
       margin-left: 0;
-    }
-
-    .sensor-value {
-      font-size: 12px;
-    }
-
-    .climate-grid {
-      grid-template-columns: 1fr;
     }
   }
 
@@ -1324,37 +791,6 @@ export const cardStyles = css`
     padding: 2px 6px;
     border-radius: 4px;
     margin-left: 4px;
-  }
-
-  /* ── Next State Change Badge ────────────────────────────────── */
-  .next-state-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    padding: 3px 8px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.1));
-    color: var(--primary-text-color);
-    transition: all 0.2s ease;
-  }
-
-  .next-state-chip.to-open {
-    background: color-mix(in srgb, var(--vc-green) 14%, transparent);
-    border-color: color-mix(in srgb, var(--vc-green) 30%, transparent);
-    color: var(--vc-green);
-  }
-
-  .next-state-chip.to-closed {
-    background: color-mix(in srgb, var(--vc-yellow) 14%, transparent);
-    border-color: color-mix(in srgb, var(--vc-yellow) 30%, transparent);
-    color: var(--vc-yellow);
-  }
-
-  .next-state-chip ha-icon {
-    --mdc-icon-size: 13px;
   }
 
   /* ── Room Temperature Prediction Graph ─────────────────────── */
@@ -1412,49 +848,4 @@ export const cardStyles = css`
     stroke-width: 1.5px;
     opacity: 1;
   }
-
-  /* ── Unified Outdoor Accordion Row ──────────────────────────── */
-  .outdoor-section {
-    margin-bottom: var(--vc-spacing);
-    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
-    padding-bottom: 12px;
-  }
-
-  .outdoor-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    user-select: none;
-    padding: 4px 0;
-  }
-
-  .outdoor-title-group {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .outdoor-icon-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
-    color: var(--primary-color);
-  }
-
-  .outdoor-icon-avatar ha-icon {
-    --mdc-icon-size: 18px;
-  }
-
-  .outdoor-name {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--primary-text-color);
-  }
 `;
-
-

@@ -9,6 +9,13 @@ import { predictRoomTemperatureSeries } from './thermal-prediction';
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
+function formatTimeRemaining(diffMs: number): string {
+  if (diffMs >= 3600 * 1000) {
+    return `${Math.round(diffMs / (3600 * 1000))}h`;
+  }
+  return `${Math.max(1, Math.round(diffMs / (60 * 1000)))}m`;
+}
+
 export function computeNextStateChange(
   status: VentilationStatus,
   forecastWindow: ForecastWindow | null,
@@ -26,17 +33,10 @@ export function computeNextStateChange(
     const diffMs = targetTime.getTime() - now.getTime();
     if (diffMs <= 0) return null;
 
-    let formattedTime = '';
-    if (diffMs >= 3600 * 1000) {
-      formattedTime = `${Math.round(diffMs / (3600 * 1000))}h`;
-    } else {
-      formattedTime = `${Math.max(1, Math.round(diffMs / (60 * 1000)))}m`;
-    }
-
     return {
       targetState: 'closed',
       timeRemainingMs: diffMs,
-      formattedTime,
+      formattedTime: formatTimeRemaining(diffMs),
       targetTime,
     };
   } else if (status === VS.DO_NOT_VENTILATE || status === VS.CAUTION) {
@@ -47,17 +47,10 @@ export function computeNextStateChange(
     const diffMs = targetTime.getTime() - now.getTime();
     if (diffMs <= 0) return null;
 
-    let formattedTime = '';
-    if (diffMs >= 3600 * 1000) {
-      formattedTime = `${Math.round(diffMs / (3600 * 1000))}h`;
-    } else {
-      formattedTime = `${Math.max(1, Math.round(diffMs / (60 * 1000)))}m`;
-    }
-
     return {
       targetState: 'open',
       timeRemainingMs: diffMs,
-      formattedTime,
+      formattedTime: formatTimeRemaining(diffMs),
       targetTime,
     };
   }

@@ -1,6 +1,5 @@
 export const CARD_VERSION = '1.1.0';
 export const CARD_NAME = 'ventilation-card';
-export const CARD_DESCRIPTION = 'Smart manual ventilation guidance based on indoor/outdoor climate data';
 
 // Default absolute humidity threshold in g/m³
 // Ventilation is recommended when indoor AH exceeds outdoor AH by this amount

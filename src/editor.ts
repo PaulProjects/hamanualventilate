@@ -24,10 +24,8 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
       balanced_max_temperature: config.balanced_max_temperature ?? DEFAULT_BALANCED_MAX_TEMP,
       min_humidity: config.min_humidity ?? DEFAULT_MIN_HUMIDITY,
       max_humidity: config.max_humidity ?? DEFAULT_MAX_HUMIDITY,
-      show_values: config.show_values ?? true,
       show_absolute_humidity: config.show_absolute_humidity ?? true,
       show_forecast: config.show_forecast ?? true,
-      show_inline_forecast: config.show_inline_forecast ?? false,
       show_history: config.show_history ?? DEFAULT_SHOW_HISTORY,
       history_hours: config.history_hours ?? DEFAULT_HISTORY_HOURS,
       forecast_hours: config.forecast_hours ?? DEFAULT_FORECAST_HOURS,
@@ -467,27 +465,6 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
 
   /* ── Event handlers ───────────────────────────────────────── */
 
-  private _valueChanged(ev: Event): void {
-    if (!this._config || !this.hass) return;
-    const target = ev.target as any;
-    const configValue = target.configValue;
-    if (!configValue) return;
-
-    const newValue = target.checked !== undefined ? target.checked : target.value;
-    if (this._config[configValue as keyof VentilationCardConfig] === newValue) return;
-
-    if (newValue === '' || newValue === undefined) {
-      const tmpConfig = { ...this._config };
-      delete (tmpConfig as any)[configValue];
-      this._config = tmpConfig;
-    } else {
-      this._config = { ...this._config, [configValue]: newValue };
-    }
-
-    fireEvent(this, 'config-changed', { config: this._config });
-    this.requestUpdate();
-  }
-
   private _selectorChanged(ev: CustomEvent): void {
     if (!this._config || !this.hass) return;
     const target = ev.target as any;
@@ -745,9 +722,4 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
       `,
     ];
   }
-}
-
-// Fallback registration
-if (!customElements.get('ventilation-card-editor')) {
-  customElements.define('ventilation-card-editor', VentilationCardEditor);
 }

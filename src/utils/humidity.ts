@@ -28,20 +28,3 @@ export function calculateAbsoluteHumidity(tempC: number, relHumidity: number): n
 
   return Math.round(ah * 10) / 10; // Round to 1 decimal
 }
-
-/**
- * Calculate dew point temperature in °C.
- *
- * @param tempC — Temperature in degrees Celsius
- * @param relHumidity — Relative humidity in percent (0-100)
- * @returns Dew point in °C
- */
-export function calculateDewPoint(tempC: number, relHumidity: number): number {
-  const a = 17.67;
-  const b = 243.5;
-
-  const alpha = (a * tempC) / (b + tempC) + Math.log(relHumidity / 100);
-  const dewPoint = (b * alpha) / (a - alpha);
-
-  return Math.round(dewPoint * 10) / 10;
-}
