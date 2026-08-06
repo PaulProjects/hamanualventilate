@@ -8,7 +8,7 @@
 import type { HomeAssistant } from 'custom-card-helpers';
 import type { ForecastEntry, ForecastWindow, VentilationGoal, SensorReadings, VentilationWindowRange } from '../types';
 import { calculateAbsoluteHumidity } from './humidity';
-import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY } from '../const';
+import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_COOLING_MIN_TEMP, DEFAULT_WARMING_MAX_TEMP } from '../const';
 
 /* ── Forecast subscription & fetch ──────────────────────────────── */
 
@@ -317,6 +317,8 @@ export function computeForecastWindow(
   balancedMaxTemp: number = DEFAULT_BALANCED_MAX_TEMP,
   minHumidity: number = DEFAULT_MIN_HUMIDITY,
   maxHumidity: number = DEFAULT_MAX_HUMIDITY,
+  coolingMinTemp: number = DEFAULT_COOLING_MIN_TEMP,
+  warmingMaxTemp: number = DEFAULT_WARMING_MAX_TEMP,
 ): ForecastWindow {
   if (!forecast || forecast.length === 0 || indoorReadings.temperature === null) {
     return {
@@ -403,6 +405,9 @@ export function computeForecastWindow(
     balancedMaxTemp,
     minHumidity,
     maxHumidity,
+    3,
+    coolingMinTemp,
+    warmingMaxTemp,
   );
 
   return {
@@ -423,6 +428,8 @@ export function computeUpcomingWindows(
   minHumidity: number = DEFAULT_MIN_HUMIDITY,
   maxHumidity: number = DEFAULT_MAX_HUMIDITY,
   limit: number = 3,
+  coolingMinTemp: number = DEFAULT_COOLING_MIN_TEMP,
+  warmingMaxTemp: number = DEFAULT_WARMING_MAX_TEMP,
 ): VentilationWindowRange[] {
   if (!forecast || forecast.length === 0 || indoorReadings.temperature === null) {
     return [];
@@ -451,6 +458,8 @@ export function computeUpcomingWindows(
       balancedMaxTemp,
       minHumidity,
       maxHumidity,
+      coolingMinTemp,
+      warmingMaxTemp,
     );
 
     return {
@@ -495,8 +504,11 @@ export function computeUpcomingWindows(
   return windows;
 }
 
-/* ── Single forecast entry evaluation ───────────────────────────── */
+/* ── Hourly evaluation logic ────────────────────────────────────── */
 
+/**
+ * Evaluate if ventilation is beneficial for a single forecast data point.
+ */
 export function evaluateForecastPoint(
   indoorTemp: number | null,
   indoorHum: number | null,
@@ -508,6 +520,8 @@ export function evaluateForecastPoint(
   balancedMaxTemp: number = DEFAULT_BALANCED_MAX_TEMP,
   minHumidity: number = DEFAULT_MIN_HUMIDITY,
   maxHumidity: number = DEFAULT_MAX_HUMIDITY,
+  coolingMinTemp: number = DEFAULT_COOLING_MIN_TEMP,
+  warmingMaxTemp: number = DEFAULT_WARMING_MAX_TEMP,
 ): boolean {
   if (indoorTemp === null || outdoorTemp === null) return false;
 
@@ -523,9 +537,11 @@ export function evaluateForecastPoint(
 
   switch (goal) {
     case 'cooling':
+      if (indoorTemp <= coolingMinTemp) return false;
       return outdoorTemp <= indoorTemp + 0.1;
 
     case 'warming': {
+      if (indoorTemp >= warmingMaxTemp) return false;
       if (outdoorTemp >= indoorTemp) return true;
       if (ahDelta !== null && ahDelta > ahThreshold) return true;
       return false;
@@ -540,16 +556,29 @@ export function evaluateForecastPoint(
     }
 
     case 'balanced': {
-      // Priority 1: Cooling down if indoor exceeds target max
-      if (indoorTemp > balancedMaxTemp && outdoorTemp < indoorTemp) {
+      // 1. If indoor temp exceeds maxTemp: only ventilate if outdoor is cooler
+      if (indoorTemp > balancedMaxTemp) {
+        return outdoorTemp < indoorTemp;
+      }
+
+      // 2. Outdoor is cooler or equal: ventilate if indoor is comfortable and not too dry
+      if (outdoorTemp <= indoorTemp + 0.1) {
+        if (indoorTemp < 16) return false;
+        if (indoorHum !== null && indoorHum < minHumidity && ahDelta !== null && ahDelta > 0) {
+          return false;
+        }
         return true;
       }
-      // Priority 2: Dehumidifying
+
+      // 3. Outdoor is warmer than indoor:
+      // If outdoor exceeds maxTemp, ventilating would overheat the room
+      if (outdoorTemp > balancedMaxTemp) {
+        return false;
+      }
+
+      // Outdoor is warmer than indoor but <= maxTemp:
+      // Allow ventilation if dehumidification is needed and air is drier
       if (indoorHum !== null && indoorHum > maxHumidity && ahDelta !== null && ahDelta > 0) {
-        return true;
-      }
-      // Priority 3: Air exchange when outdoor is cooler/equal
-      if (outdoorTemp <= indoorTemp + 0.1 && indoorTemp >= 16) {
         return true;
       }
       if (

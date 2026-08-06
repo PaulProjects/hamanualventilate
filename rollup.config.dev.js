@@ -19,7 +19,12 @@ export default {
   },
   plugins: [
     resolve(),
-    esbuild({ target: 'es2022' }),
+    esbuild({
+      target: 'es2022',
+      define: {
+        '__DEV__': 'true',
+      },
+    }),
     json(),
     serve({
       contentBase: './dist',

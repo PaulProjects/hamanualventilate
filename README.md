@@ -180,12 +180,17 @@ rooms:
 |---|---|---|---|---|
 | `type` | string | **Yes** | `custom:ventilation-card` | Card identifier |
 | `title` | string | No | `Ventilation Guide` | Card header title |
-| `goal` | string | No | `cooling` | `cooling`, `warming`, `humidity`, `balanced` |
+| `goal` | string | No | `cooling` | Default mode: `cooling`, `warming`, `humidity`, `balanced` |
+| `goal_entity` | string | No | `undefined` | Optional `input_select` or `select` entity to track and switch modes by clicking the header badge |
+| `cooling_min_temperature` | number | No | `18.0` | Minimum comfort temperature floor (°C) for Cooling mode |
+| `warming_max_temperature` | number | No | `23.0` | Maximum heating cap (°C) for Warming mode |
+| `balanced_max_temperature` | number | No | `24.0` | Target maximum temperature threshold (°C) for Balanced mode |
+| `min_humidity` | number | No | `30` | Minimum humidity lower limit (%) |
+| `max_humidity` | number | No | `60` | Maximum humidity upper limit (%) |
+| `ah_threshold` | number | No | `2.0` | Absolute humidity difference threshold ($g/m^3$) |
 | `weather_entity` | string | No | `undefined` | `weather.*` entity for 24h forecast |
 | `outdoor_temperature` | string | No | `undefined` | Global outdoor temperature sensor |
 | `outdoor_humidity` | string | No | `undefined` | Global outdoor humidity sensor |
-| `balanced_max_temperature` | number | No | `24` | Target temperature threshold for `balanced` goal |
-| `ah_threshold` | number | No | `2.0` | Absolute humidity threshold ($g/m^3$) |
 | `show_absolute_humidity` | boolean | No | `true` | Display absolute humidity ($g/m^3$) |
 | `show_forecast` | boolean | No | `true` | Display forecast summary chips |
 | `show_history` | boolean | No | `false` | Display sensor history in graph |
@@ -197,10 +202,16 @@ rooms:
 
 ## 9. Visual Editor Specification
 
-The card includes a custom visual editor (`ventilation-card-editor`) featuring:
-- **General Accordion:** Title, Goal dropdown, Max Temperature slider, Humidity limits.
-- **Outdoor Sensors Accordion:** Weather entity picker, Outdoor temp & humidity entity pickers.
-- **Rooms Accordion:** Dynamic list with Add/Remove buttons, icon picker, entity pickers, and collapsible per-room override settings.
+The card includes a comprehensive custom visual editor (`ventilation-card-editor`) featuring organized, always-visible configuration sections:
+- **General (Top Level):** Title, Default Mode selector, and Mode Entity (`input_select` / `select`) picker.
+- **Cooling Mode Settings:** Min. comfort temperature floor limit.
+- **Warming Mode Settings:** Max. heating temperature cap limit.
+- **Humidity Mode Settings:** Min./Max. humidity limits and absolute humidity threshold.
+- **Balanced Mode Settings:** Max. temperature threshold.
+- **Visuals:** Toggles for forecast, history, humidity slots, and state change countdown.
+- **Thermal Prediction:** Building insulation loss and ventilation exchange parameters.
+- **Outdoor Sensors:** Weather entity and outdoor temperature/humidity sensor pickers.
+- **Rooms:** Dynamic list with Add/Remove buttons, icon picker, entity pickers, and collapsible per-room override settings.
 
 ---
 
@@ -224,9 +235,15 @@ The card includes a custom visual editor (`ventilation-card-editor`) featuring:
 4. Add `/local/ventilation-card.js` as a **JavaScript Module**.
 5. Add the card to any dashboard using `type: custom:ventilation-card`.
 
-### Development Mode
-```bash
-# Start dev server with hot-reload (port 5005)
-npm start
-```
+### Development Mode (Running Alongside Production)
+When developing, the dev server compiles the card under a separate tag (`custom:ventilation-card-dev`) to prevent conflicts with the production/HACS version on the same Home Assistant instance:
+1. Start the dev server with hot-reload:
+   ```bash
+   npm start
+   ```
+2. In Home Assistant, add a Lovelace resource pointing to your dev machine:
+   * **URL:** `http://<YOUR_IP>:5005/ventilation-card.js`
+   * **Type:** `JavaScript Module`
+3. Add cards to your test dashboard using `type: custom:ventilation-card-dev` (or choose **Ventilation Card (Dev)** from the card picker).
+
 

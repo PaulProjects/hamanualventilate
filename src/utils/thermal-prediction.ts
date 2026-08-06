@@ -1,7 +1,7 @@
 import type { ForecastEntry, PredictionPoint, SensorReadings, VentilationGoal } from '../types';
 import { evaluateForecastPoint } from './forecast';
 import { calculateAbsoluteHumidity } from './humidity';
-import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY } from '../const';
+import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_COOLING_MIN_TEMP, DEFAULT_WARMING_MAX_TEMP } from '../const';
 
 export interface ThermalPredictionOptions {
   insulationFactor?: number; // k_closed: thermal loss coefficient when windows are closed (default: 0.05)
@@ -22,6 +22,8 @@ export function predictRoomTemperatureSeries(
   balancedMaxTemp: number = DEFAULT_BALANCED_MAX_TEMP,
   minHumidity: number = DEFAULT_MIN_HUMIDITY,
   maxHumidity: number = DEFAULT_MAX_HUMIDITY,
+  coolingMinTemp: number = DEFAULT_COOLING_MIN_TEMP,
+  warmingMaxTemp: number = DEFAULT_WARMING_MAX_TEMP,
 ): PredictionPoint[] {
   if (indoor.temperature === null || !forecast || forecast.length === 0) {
     return [];
@@ -80,6 +82,8 @@ export function predictRoomTemperatureSeries(
       balancedMaxTemp,
       minHumidity,
       maxHumidity,
+      coolingMinTemp,
+      warmingMaxTemp,
     );
 
     const dtHours = Math.max(0.1, (entryTime - lastTime) / (3600 * 1000));

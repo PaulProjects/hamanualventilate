@@ -2,7 +2,10 @@ import { LovelaceCard, LovelaceCardConfig, LovelaceCardEditor } from 'custom-car
 
 declare global {
   interface HTMLElementTagNameMap {
+    'ventilation-card': LovelaceCard;
+    'ventilation-card-dev': LovelaceCard;
     'ventilation-card-editor': LovelaceCardEditor;
+    'ventilation-card-dev-editor': LovelaceCardEditor;
     'hui-error-card': LovelaceCard;
   }
 }
@@ -32,13 +35,17 @@ export interface RoomConfig {
 export interface VentilationCardConfig extends LovelaceCardConfig {
   type: string;
   title?: string;
+  goal?: VentilationGoal;
+  goal_entity?: string;              // Entity (input_select / select) to read & write active mode
   weather_entity?: string;           // weather.* entity for forecast
   outdoor_temperature?: string;      // sensor.* entity
   outdoor_humidity?: string;         // sensor.* entity
-  goal: VentilationGoal;
-  balanced_max_temperature?: number; // only for goal=balanced
-  min_humidity?: number;             // global min relative humidity %
-  max_humidity?: number;             // global max relative humidity %
+  // Mode-specific settings
+  cooling_min_temperature?: number;  // min comfort temperature limit for cooling (default: 18°C)
+  warming_max_temperature?: number;  // max temperature limit for warming (default: 24°C)
+  balanced_max_temperature?: number; // max temperature limit for balanced mode (default: 24°C)
+  min_humidity?: number;             // min relative humidity % (default: 40%)
+  max_humidity?: number;             // max relative humidity % (default: 60%)
   ah_threshold?: number;             // absolute humidity threshold (g/m³), default 2
   rooms: RoomConfig[];
   // Visual options

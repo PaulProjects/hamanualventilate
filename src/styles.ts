@@ -38,6 +38,10 @@ export const cardStyles = css`
     --mdc-icon-size: 20px;
   }
 
+  .goal-badge-wrapper {
+    position: relative;
+  }
+
   .goal-badge {
     display: inline-flex;
     align-items: center;
@@ -51,6 +55,92 @@ export const cardStyles = css`
     background: color-mix(in srgb, var(--primary-color) 16%, transparent);
     color: var(--primary-color);
     border: 1px solid color-mix(in srgb, var(--primary-color) 30%, transparent);
+    transition: all 0.2s ease;
+  }
+
+  .goal-badge--interactive {
+    cursor: pointer;
+    user-select: none;
+  }
+
+  .goal-badge--interactive:hover {
+    background: color-mix(in srgb, var(--primary-color) 24%, transparent);
+    border-color: color-mix(in srgb, var(--primary-color) 50%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .goal-badge__chevron {
+    --mdc-icon-size: 14px;
+    margin-left: 2px;
+    opacity: 0.8;
+  }
+
+  /* Mode selection dropdown */
+  .goal-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 100;
+    background: var(--card-background-color, #1c1c1e);
+    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
+    border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+    padding: 6px;
+    min-width: 170px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    backdrop-filter: blur(10px);
+  }
+
+  .goal-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--primary-text-color);
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    text-align: left;
+    width: 100%;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .goal-dropdown-item ha-icon {
+    --mdc-icon-size: 16px;
+    color: var(--secondary-text-color);
+  }
+
+  .goal-dropdown-item:hover {
+    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
+    color: var(--primary-color);
+  }
+
+  .goal-dropdown-item:hover ha-icon {
+    color: var(--primary-color);
+  }
+
+  .goal-dropdown-item--selected {
+    background: color-mix(in srgb, var(--primary-color) 18%, transparent);
+    color: var(--primary-color);
+    font-weight: 600;
+  }
+
+  .goal-dropdown-item--selected ha-icon {
+    color: var(--primary-color);
+  }
+
+  .goal-dropdown-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 99;
   }
 
   /* ── Diagnostics Banner ──────────────────────────────────── */

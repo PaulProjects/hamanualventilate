@@ -5,9 +5,9 @@ import { customElement, property, state } from 'lit/decorators.js';
 
 import type { VentilationCardConfig, RoomConfig } from './types';
 import { localize } from './localize/localize';
-import { DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS, DEFAULT_SHOW_HUMIDITY_SLOTS } from './const';
+import { CARD_EDITOR_NAME, DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_MIN_HUMIDITY, DEFAULT_MAX_HUMIDITY, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS, DEFAULT_SHOW_HUMIDITY_SLOTS, DEFAULT_COOLING_MIN_TEMP, DEFAULT_WARMING_MAX_TEMP } from './const';
 
-@customElement('ventilation-card-editor')
+@customElement(CARD_EDITOR_NAME)
 export class VentilationCardEditor extends LitElement implements LovelaceCardEditor {
   @property({ attribute: false }) public hass!: HomeAssistant;
   @state() private _config?: VentilationCardConfig;
@@ -19,11 +19,14 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
     this._config = {
       ...structuredClone(config),
       goal: config.goal || 'cooling',
-      rooms: config.rooms || [],
-      ah_threshold: config.ah_threshold ?? DEFAULT_AH_THRESHOLD,
+      goal_entity: config.goal_entity || '',
+      cooling_min_temperature: config.cooling_min_temperature ?? DEFAULT_COOLING_MIN_TEMP,
+      warming_max_temperature: config.warming_max_temperature ?? DEFAULT_WARMING_MAX_TEMP,
       balanced_max_temperature: config.balanced_max_temperature ?? DEFAULT_BALANCED_MAX_TEMP,
       min_humidity: config.min_humidity ?? DEFAULT_MIN_HUMIDITY,
       max_humidity: config.max_humidity ?? DEFAULT_MAX_HUMIDITY,
+      ah_threshold: config.ah_threshold ?? DEFAULT_AH_THRESHOLD,
+      rooms: config.rooms || [],
       show_absolute_humidity: config.show_absolute_humidity ?? true,
       show_forecast: config.show_forecast ?? true,
       show_history: config.show_history ?? DEFAULT_SHOW_HISTORY,
@@ -76,20 +79,36 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
           @value-changed=${this._selectorChanged}
         ></ha-selector>
 
-        ${this._config?.goal === 'balanced'
-          ? html`
-              <ha-selector
-                .hass=${this.hass}
-                .selector=${{ number: { min: 15, max: 35, step: 0.5, mode: 'box', unit_of_measurement: '°C' } }}
-                .value=${this._config.balanced_max_temperature ?? DEFAULT_BALANCED_MAX_TEMP}
-                label="${localize('editor.max_temperature')}"
-                .configValue=${'balanced_max_temperature'}
-                @value-changed=${this._selectorChanged}
-              ></ha-selector>
-            `
-          : nothing}
+        <ha-selector
+          .hass=${this.hass}
+          .selector=${{ entity: { domain: ['input_select', 'select'] } }}
+          .value=${this._config?.goal_entity || ''}
+          label="${localize('editor.goal_entity')}"
+          .configValue=${'goal_entity'}
+          @value-changed=${this._selectorChanged}
+        ></ha-selector>
       </div>
 
+      ${this._renderSection(
+        'mode_cooling',
+        localize('editor.mode_cooling'),
+        this._renderCoolingSection(),
+      )}
+      ${this._renderSection(
+        'mode_warming',
+        localize('editor.mode_warming'),
+        this._renderWarmingSection(),
+      )}
+      ${this._renderSection(
+        'mode_humidity',
+        localize('editor.mode_humidity'),
+        this._renderHumiditySection(),
+      )}
+      ${this._renderSection(
+        'mode_balanced',
+        localize('editor.mode_balanced'),
+        this._renderBalancedSection(),
+      )}
       ${this._renderSection(
         'visuals',
         localize('editor.visuals'),
@@ -99,11 +118,6 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
         'prediction',
         localize('editor.prediction'),
         this._renderPredictionSection(),
-      )}
-      ${this._renderSection(
-        'thresholds',
-        localize('editor.thresholds'),
-        this._renderThresholdsSection(),
       )}
       ${this._renderSection(
         'outdoor',
@@ -118,9 +132,35 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
     `;
   }
 
-  /* ── Thresholds section ───────────────────────────────────── */
+  /* ── Mode-specific sections ───────────────────────────────── */
 
-  private _renderThresholdsSection(): TemplateResult {
+  private _renderCoolingSection(): TemplateResult {
+    return html`
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ number: { min: 10, max: 30, step: 0.5, mode: 'box', unit_of_measurement: '°C' } }}
+        .value=${this._config?.cooling_min_temperature ?? DEFAULT_COOLING_MIN_TEMP}
+        label="${localize('editor.cooling_min_temp')}"
+        .configValue=${'cooling_min_temperature'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+    `;
+  }
+
+  private _renderWarmingSection(): TemplateResult {
+    return html`
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ number: { min: 15, max: 35, step: 0.5, mode: 'box', unit_of_measurement: '°C' } }}
+        .value=${this._config?.warming_max_temperature ?? DEFAULT_WARMING_MAX_TEMP}
+        label="${localize('editor.warming_max_temp')}"
+        .configValue=${'warming_max_temperature'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+    `;
+  }
+
+  private _renderHumiditySection(): TemplateResult {
     return html`
       <ha-selector
         .hass=${this.hass}
@@ -142,10 +182,23 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
 
       <ha-selector
         .hass=${this.hass}
-        .selector=${{ number: { min: 0, max: 10, step: 0.5, mode: 'box', unit_of_measurement: 'g/m³' } }}
+        .selector=${{ number: { min: 0.5, max: 10, step: 0.5, mode: 'box', unit_of_measurement: 'g/m³' } }}
         .value=${this._config?.ah_threshold ?? DEFAULT_AH_THRESHOLD}
         label="${localize('editor.ah_threshold')}"
         .configValue=${'ah_threshold'}
+        @value-changed=${this._selectorChanged}
+      ></ha-selector>
+    `;
+  }
+
+  private _renderBalancedSection(): TemplateResult {
+    return html`
+      <ha-selector
+        .hass=${this.hass}
+        .selector=${{ number: { min: 15, max: 35, step: 0.5, mode: 'box', unit_of_measurement: '°C' } }}
+        .value=${this._config?.balanced_max_temperature ?? DEFAULT_BALANCED_MAX_TEMP}
+        label="${localize('editor.balanced_max_temp')}"
+        .configValue=${'balanced_max_temperature'}
         @value-changed=${this._selectorChanged}
       ></ha-selector>
     `;

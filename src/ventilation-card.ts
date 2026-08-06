@@ -2,9 +2,9 @@ import { LitElement, html, svg, TemplateResult, PropertyValues, nothing } from '
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, LovelaceCardEditor } from 'custom-card-helpers';
 
-import type { VentilationCardConfig, RoomConfig, RoomAdvice, ForecastEntry, SensorReadings, HealthIssue, ForecastWindow, VentilationWindowRange, PredictionPoint } from './types';
+import type { VentilationCardConfig, RoomConfig, RoomAdvice, ForecastEntry, SensorReadings, HealthIssue, ForecastWindow, VentilationWindowRange, PredictionPoint, VentilationGoal } from './types';
 import { VentilationStatus } from './types';
-import { CARD_VERSION, CARD_NAME, DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS, DEFAULT_SHOW_HUMIDITY_SLOTS } from './const';
+import { CARD_VERSION, CARD_NAME, CARD_EDITOR_NAME, IS_DEV, DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS, DEFAULT_SHOW_HUMIDITY_SLOTS, DEFAULT_COOLING_MIN_TEMP, DEFAULT_WARMING_MAX_TEMP } from './const';
 import { cardStyles } from './styles';
 import { localize } from './localize/localize';
 import { getVentilationAdvice, getSensorReadings, readSensor } from './utils/ventilation-logic';
@@ -14,7 +14,7 @@ import { fetchHistoryFromHass, HistoryDataPoint } from './utils/history';
 
 /* ── Console banner ─────────────────────────────────────────── */
 console.info(
-  `%c  VENTILATION-CARD \n%c  ${localize('common.version')} ${CARD_VERSION}    `,
+  `%c  VENTILATION-CARD${IS_DEV ? ' (DEV)' : ''} \n%c  ${localize('common.version')} ${CARD_VERSION}    `,
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray',
 );
@@ -28,8 +28,10 @@ interface WindowWithCustomCards extends Window {
   (window as unknown as WindowWithCustomCards).customCards || [];
 (window as unknown as WindowWithCustomCards).customCards.push({
   type: CARD_NAME,
-  name: 'Ventilation Card',
-  description: 'Smart manual ventilation guidance based on indoor/outdoor climate data',
+  name: IS_DEV ? 'Ventilation Card (Dev)' : 'Ventilation Card',
+  description: IS_DEV
+    ? '[DEV] Smart manual ventilation guidance based on indoor/outdoor climate data'
+    : 'Smart manual ventilation guidance based on indoor/outdoor climate data',
 });
 
 /* ── Main card element ──────────────────────────────────────── */
@@ -38,7 +40,7 @@ interface WindowWithCustomCards extends Window {
 export class VentilationCard extends LitElement {
   public static async getConfigElement(): Promise<LovelaceCardEditor> {
     await import('./editor');
-    return document.createElement('ventilation-card-editor') as unknown as LovelaceCardEditor;
+    return document.createElement(CARD_EDITOR_NAME) as unknown as LovelaceCardEditor;
   }
 
   public static getStubConfig(): Record<string, unknown> {
@@ -57,6 +59,7 @@ export class VentilationCard extends LitElement {
   @state() private _outdoorHoverIndex: number | null = null;
   @state() private _roomHoverIndices: Record<number, number | null> = {};
   @state() private _historyData: Record<string, HistoryDataPoint[]> = {};
+  @state() private _modeMenuOpen = false;
 
   private _forecastUnsub?: () => void;
   private _subscribedEntity?: string;
@@ -76,6 +79,8 @@ export class VentilationCard extends LitElement {
 
     this.config = {
       ah_threshold: DEFAULT_AH_THRESHOLD,
+      cooling_min_temperature: DEFAULT_COOLING_MIN_TEMP,
+      warming_max_temperature: DEFAULT_WARMING_MAX_TEMP,
       balanced_max_temperature: DEFAULT_BALANCED_MAX_TEMP,
       show_absolute_humidity: true,
       show_forecast: true,
@@ -112,7 +117,8 @@ export class VentilationCard extends LitElement {
       changedProps.has('_expandedOutdoor') ||
       changedProps.has('_outdoorHoverIndex') ||
       changedProps.has('_roomHoverIndices') ||
-      changedProps.has('_historyData')
+      changedProps.has('_historyData') ||
+      changedProps.has('_modeMenuOpen')
     ) {
       return true;
     }
@@ -199,6 +205,7 @@ export class VentilationCard extends LitElement {
 
       // Compute effective forecast: use WS forecast or fallback to weather entity attributes
       const effectiveForecast = this._getEffectiveForecast();
+      const effectiveGoal = this._getEffectiveGoal();
 
       // Compute room-specific advice & forecast window
       const rooms = this.config.rooms || [];
@@ -208,7 +215,7 @@ export class VentilationCard extends LitElement {
           room,
           this.config.outdoor_temperature,
           this.config.outdoor_humidity,
-          this.config.goal,
+          effectiveGoal,
           this.config.ah_threshold,
           this.config.balanced_max_temperature,
           this.config.min_humidity,
@@ -218,6 +225,8 @@ export class VentilationCard extends LitElement {
           this.config.insulation_factor,
           this.config.ventilation_speed,
           this.config.forecast_hours,
+          this.config.cooling_min_temperature,
+          this.config.warming_max_temperature,
         ),
       );
 
@@ -228,7 +237,7 @@ export class VentilationCard extends LitElement {
               <ha-icon icon="mdi:air-filter" class="header-icon"></ha-icon>
               <span>${this.config.title || localize('card.title_default')}</span>
             </div>
-            ${this._renderGoalBadge()}
+            ${this._renderGoalBadge(effectiveGoal)}
           </div>
 
           <div class="card-content">
@@ -293,8 +302,21 @@ export class VentilationCard extends LitElement {
     `;
   }
 
-  private _renderGoalBadge(): TemplateResult {
-    const goal = this.config.goal || 'cooling';
+  private _getEffectiveGoal(): VentilationGoal {
+    if (this.config.goal_entity && this.hass?.states?.[this.config.goal_entity]) {
+      const rawState = this.hass.states[this.config.goal_entity].state?.toLowerCase().trim();
+      if (rawState === 'cooling' || rawState === 'warming' || rawState === 'humidity' || rawState === 'balanced') {
+        return rawState as VentilationGoal;
+      }
+      if (rawState?.includes('cool')) return 'cooling';
+      if (rawState?.includes('warm') || rawState?.includes('heat')) return 'warming';
+      if (rawState?.includes('humid') || rawState?.includes('moist')) return 'humidity';
+      if (rawState?.includes('balanc')) return 'balanced';
+    }
+    return this.config.goal || 'cooling';
+  }
+
+  private _renderGoalBadge(goal: VentilationGoal): TemplateResult {
     const goalLabel = localize(`goal.${goal}`);
     let goalIcon = 'mdi:snowflake';
 
@@ -302,12 +324,98 @@ export class VentilationCard extends LitElement {
     if (goal === 'humidity') goalIcon = 'mdi:water-percent';
     if (goal === 'balanced') goalIcon = 'mdi:scale-balance';
 
+    const isInteractive = Boolean(this.config.goal_entity && this.hass?.states?.[this.config.goal_entity]);
+
+    const modes: Array<{ id: VentilationGoal; label: string; icon: string }> = [
+      { id: 'cooling', label: localize('goal.cooling'), icon: 'mdi:snowflake' },
+      { id: 'warming', label: localize('goal.warming'), icon: 'mdi:fire' },
+      { id: 'humidity', label: localize('goal.humidity'), icon: 'mdi:water-percent' },
+      { id: 'balanced', label: localize('goal.balanced'), icon: 'mdi:scale-balance' },
+    ];
+
     return html`
-      <div class="goal-badge goal-${goal}">
-        <ha-icon icon="${goalIcon}"></ha-icon>
-        <span>${goalLabel}</span>
+      <div class="goal-badge-wrapper">
+        <div
+          class="goal-badge goal-${goal} ${isInteractive ? 'goal-badge--interactive' : ''}"
+          @click=${isInteractive ? this._toggleModeMenu : nothing}
+          title=${isInteractive ? 'Click to change ventilation mode' : ''}
+        >
+          <ha-icon icon="${goalIcon}"></ha-icon>
+          <span>${goalLabel}</span>
+          ${isInteractive
+            ? html`<ha-icon class="goal-badge__chevron" icon=${this._modeMenuOpen ? 'mdi:chevron-up' : 'mdi:chevron-down'}></ha-icon>`
+            : nothing}
+        </div>
+
+        ${isInteractive && this._modeMenuOpen
+          ? html`
+              <div class="goal-dropdown-backdrop" @click=${this._closeModeMenu}></div>
+              <div class="goal-dropdown-menu">
+                ${modes.map(
+                  (m) => html`
+                    <button
+                      type="button"
+                      class="goal-dropdown-item ${m.id === goal ? 'goal-dropdown-item--selected' : ''}"
+                      @click=${(ev: Event) => {
+                        ev.stopPropagation();
+                        this._selectMode(m.id);
+                      }}
+                    >
+                      <ha-icon icon=${m.icon}></ha-icon>
+                      <span>${m.label}</span>
+                    </button>
+                  `,
+                )}
+              </div>
+            `
+          : nothing}
       </div>
     `;
+  }
+
+  private _toggleModeMenu = (ev: Event): void => {
+    ev.stopPropagation();
+    this._modeMenuOpen = !this._modeMenuOpen;
+  };
+
+  private _closeModeMenu = (ev: Event): void => {
+    ev.stopPropagation();
+    this._modeMenuOpen = false;
+  };
+
+  private async _selectMode(mode: VentilationGoal): Promise<void> {
+    this._modeMenuOpen = false;
+    const goalEntity = this.config.goal_entity;
+    if (!goalEntity || !this.hass) return;
+
+    const stateObj = this.hass.states[goalEntity];
+    const domain = goalEntity.split('.')[0] || 'input_select';
+
+    let optionToSet: string = mode;
+    const options: string[] = stateObj?.attributes?.options || [];
+    if (options.length > 0) {
+      const match = options.find((opt) => {
+        const lower = opt.toLowerCase();
+        if (mode === 'cooling' && lower.includes('cool')) return true;
+        if (mode === 'warming' && (lower.includes('warm') || lower.includes('heat'))) return true;
+        if (mode === 'humidity' && (lower.includes('humid') || lower.includes('moist'))) return true;
+        if (mode === 'balanced' && lower.includes('balanc')) return true;
+        return lower === mode;
+      });
+      if (match) {
+        optionToSet = match;
+      }
+    }
+
+    try {
+      const serviceDomain = domain === 'select' ? 'select' : 'input_select';
+      await this.hass.callService(serviceDomain, 'select_option', {
+        entity_id: goalEntity,
+        option: optionToSet,
+      });
+    } catch (err) {
+      console.error(`Failed to change mode for ${goalEntity}:`, err);
+    }
   }
 
   private _findClosestPointIndex(e: MouseEvent, points: Array<{ x: number }>): number {
@@ -1820,6 +1928,7 @@ export class VentilationCard extends LitElement {
   private _getTrackedEntities(): string[] {
     const entities: string[] = [];
 
+    if (this.config.goal_entity) entities.push(this.config.goal_entity);
     if (this.config.outdoor_temperature) entities.push(this.config.outdoor_temperature);
     if (this.config.outdoor_humidity) entities.push(this.config.outdoor_humidity);
     if (this.config.weather_entity) entities.push(this.config.weather_entity);
@@ -1893,8 +2002,19 @@ export class VentilationCard extends LitElement {
   }
 
   public getGridOptions() {
-    const rows = 2 + (this.config?.rooms?.length || 1) * 2;
-    return { rows, columns: 6, min_rows: 3, max_rows: rows + 4 };
+    return {
+      columns: 12,
+      min_columns: 9,
+      rows: 'auto',
+    };
+  }
+
+  public getLayoutOptions() {
+    return {
+      grid_columns: 12,
+      grid_min_columns: 9,
+      grid_rows: 'auto',
+    };
   }
 }
 
