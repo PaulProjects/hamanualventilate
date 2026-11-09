@@ -4,7 +4,7 @@ import { customElement, property, state } from 'lit/decorators.js';
 
 import type { VentilationCardConfig, RoomConfig } from './types';
 import { localize } from './localize/localize';
-import { CARD_EDITOR_NAME } from './const';
+import { CARD_EDITOR_NAME, DEFAULT_GRAPH } from './const';
 
 const sensor = { entity: { domain: 'sensor' } };
 const degrees = { number: { min: 10, max: 30, step: 0.5, mode: 'box', unit_of_measurement: '°C' } };
@@ -17,6 +17,15 @@ const CARD_SCHEMA = [
   { name: 'weather_entity', selector: { entity: { domain: 'weather' } } },
   { name: 'outdoor_temperature', selector: sensor },
   { name: 'outdoor_humidity', selector: sensor },
+  {
+    name: 'graph',
+    selector: {
+      select: {
+        multiple: true,
+        options: ['temperature', 'humidity', 'absolute_humidity'].map((value) => ({ value, label: localize(`editor.graph_${value}`) })),
+      },
+    },
+  },
   { name: 'history_hours', selector: hours },
   { name: 'forecast_hours', selector: hours },
 ];
@@ -57,7 +66,7 @@ export class VentilationCardEditor extends LitElement implements LovelaceCardEdi
     return html`
       <ha-form
         .hass=${this.hass}
-        .data=${this._config}
+        .data=${{ graph: DEFAULT_GRAPH, ...this._config }}
         .schema=${CARD_SCHEMA}
         .computeLabel=${(s: { name: string }) => localize(`editor.${s.name}`)}
         @value-changed=${(e: CustomEvent) => {

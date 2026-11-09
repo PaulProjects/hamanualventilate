@@ -9,40 +9,21 @@ export const cardStyles = css`
     --vc-cold: var(--blue-color, #2196f3);
     --vc-humid: var(--cyan-color, #00acc1);
     --vc-muted: var(--secondary-text-color, #727272);
+    /* Graph line colours, one per metric */
+    --vc-t: var(--orange-color, #ff9800);
+    --vc-rh: var(--cyan-color, #00acc1);
+    --vc-ah: var(--purple-color, #ab47bc);
     --vc-stat-width: 4.6em;
   }
   ha-card {
     padding: 12px 12px 8px;
   }
   .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
     margin-bottom: 8px;
   }
   .title {
     font-size: 1.15em;
     font-weight: 500;
-  }
-  .metrics {
-    display: flex;
-    gap: 4px;
-  }
-  .chip {
-    font: inherit;
-    font-size: 0.75em;
-    padding: 2px 8px;
-    border-radius: 12px;
-    border: 1px solid var(--divider-color, #ccc);
-    background: none;
-    color: var(--vc-muted);
-    cursor: pointer;
-  }
-  .chip.on {
-    background: var(--primary-color, #03a9f4);
-    border-color: var(--primary-color, #03a9f4);
-    color: var(--text-primary-color, #fff);
   }
 
   /* The left edge colour is the advice at a glance */
@@ -54,7 +35,6 @@ export const cardStyles = css`
   }
   .room.outdoor {
     border-top: none;
-    color: var(--vc-muted);
   }
   .room.air,
   .room.open {
@@ -72,15 +52,14 @@ export const cardStyles = css`
   .row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) repeat(3, var(--vc-stat-width));
-    align-items: start;
-    column-gap: 4px;
-    padding: 6px 0;
+    align-items: center;
+    gap: 2px 4px;
+    padding: 8px 0;
   }
   .row[role='button'] {
     cursor: pointer;
   }
-  .row:focus-visible,
-  .chip:focus-visible {
+  .row:focus-visible {
     outline: 2px solid var(--primary-color, #03a9f4);
     outline-offset: 2px;
   }
@@ -101,15 +80,26 @@ export const cardStyles = css`
     flex: none;
     color: var(--vc-muted);
   }
-  .stat {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    line-height: 1.2;
+  button.stat {
+    font: inherit;
+    font-weight: 500;
+    background: none;
+    border: none;
+    padding: 4px 0;
+    cursor: pointer;
+    border-radius: 4px;
   }
-  .value {
+  button.stat:hover {
+    background: var(--secondary-background-color, rgba(127, 127, 127, 0.15));
+  }
+  button.stat:focus-visible {
+    outline: 2px solid var(--primary-color, #03a9f4);
+  }
+  .stat {
+    text-align: right;
     font-variant-numeric: tabular-nums;
     font-weight: 500;
+    color: var(--primary-text-color, #212121);
   }
   small {
     font-size: 0.7em;
@@ -117,22 +107,13 @@ export const cardStyles = css`
     color: var(--vc-muted);
     margin-left: 1px;
   }
-  .sub {
-    font-size: 0.7em;
-    color: var(--vc-muted);
-    white-space: nowrap;
-    min-height: 1.2em;
-  }
-  .outdoor .sub {
-    display: none;
-  }
-  .stat.warm .value {
+  .stat.warm {
     color: var(--vc-warm);
   }
-  .stat.cold .value {
+  .stat.cold {
     color: var(--vc-cold);
   }
-  .stat.humid .value {
+  .stat.humid {
     color: var(--vc-humid);
   }
   .hint {
@@ -143,6 +124,17 @@ export const cardStyles = css`
     font-size: 0.85em;
     color: var(--vc-muted);
   }
+  .hint .text {
+    flex: 1;
+  }
+  .age {
+    font-size: 0.85em;
+    color: var(--vc-muted);
+    white-space: nowrap;
+  }
+  .age.late {
+    color: var(--vc-wait);
+  }
   .dot {
     width: 10px;
     height: 10px;
@@ -151,58 +143,47 @@ export const cardStyles = css`
     background: var(--c);
     border: 1px solid var(--divider-color, #ccc);
   }
-  .room:not(.ok):not(.unknown) .hint {
+  .room:not(.ok):not(.unknown) .hint .text {
     color: var(--primary-text-color, #212121);
   }
   .room:not(.ok):not(.unknown) .dot {
     border-color: var(--c);
   }
 
-  .graphs {
-    padding: 2px 0 8px;
-  }
   .chart {
-    margin-top: 6px;
-  }
-  .chart-head {
-    display: flex;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 2px 8px;
-    font-size: 0.75em;
+    padding: 2px 0 8px;
   }
   .legend {
     display: flex;
     flex-wrap: wrap;
-    gap: 2px 10px;
+    gap: 2px 12px;
+    font-size: 0.75em;
     color: var(--vc-muted);
+    margin-bottom: 4px;
   }
   .legend i {
     display: inline-block;
     width: 12px;
-    margin-right: 3px;
+    margin-right: 4px;
     vertical-align: middle;
     border-top: 2px solid currentColor;
   }
-  .legend i.dashed {
-    border-top-style: dashed;
+  .legend i.thin {
+    border-top-width: 1px;
+    opacity: 0.6;
   }
-  .in {
-    color: var(--primary-color, #03a9f4);
+  .t {
+    color: var(--vc-t);
   }
-  .out {
-    color: var(--vc-muted);
+  .rh {
+    color: var(--vc-rh);
   }
-  .go {
-    color: var(--vc-go);
-  }
-  .plot {
-    position: relative;
-    height: 72px;
+  .ah {
+    color: var(--vc-ah);
   }
   svg {
     width: 100%;
-    height: 100%;
+    height: 120px;
     display: block;
     overflow: visible;
   }
@@ -212,14 +193,15 @@ export const cardStyles = css`
   }
   polyline {
     stroke: currentColor;
-    stroke-width: 1.75;
+    stroke-width: 2;
     stroke-linejoin: round;
   }
-  polyline.out {
-    stroke-width: 1.25;
+  polyline.thin {
+    stroke-width: 1;
+    opacity: 0.6;
   }
-  .dashed {
-    stroke-dasharray: 4 3;
+  polyline.dashed {
+    stroke-dasharray: 5 3;
   }
   line.grid {
     stroke: var(--divider-color, #e0e0e0);
@@ -230,31 +212,11 @@ export const cardStyles = css`
     stroke-width: 1;
     opacity: 0.5;
   }
+  /* Target temperature / humidity ceiling, in the colour of its metric */
   line.ref {
-    stroke: var(--vc-go);
+    stroke: currentColor;
     stroke-width: 1;
-    stroke-dasharray: 1 3;
-  }
-  .ymax,
-  .ymin,
-  .yref {
-    position: absolute;
-    left: 0;
-    font-size: 0.65em;
-    color: var(--vc-muted);
-    pointer-events: none;
-  }
-  .ymax {
-    top: 0;
-  }
-  .ymin {
-    bottom: 0;
-  }
-  .yref {
-    left: auto;
-    right: 0;
-    transform: translateY(-100%);
-    color: var(--vc-go);
+    stroke-dasharray: 1 4;
   }
   .ticks {
     position: relative;
@@ -273,8 +235,8 @@ export const cardStyles = css`
     padding: 0 2px;
   }
   .note {
-    margin-top: 6px;
-    font-size: 0.7em;
+    padding-bottom: 8px;
+    font-size: 0.75em;
     color: var(--vc-muted);
   }
 `;

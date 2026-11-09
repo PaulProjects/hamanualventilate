@@ -28,6 +28,7 @@ export interface VentilationCardConfig extends LovelaceCardConfig {
   max_humidity?: number; // % relative humidity ceiling (default 60)
   history_hours?: number; // graph history (default 24)
   forecast_hours?: number; // graph + prediction horizon (default 24)
+  graph?: string[]; // metrics in the room graph: temperature | humidity | absolute_humidity
   rooms: RoomConfig[];
 }
 

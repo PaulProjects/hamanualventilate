@@ -12,12 +12,9 @@ There are no modes. You set a desired temperature (per card, optionally per room
 
 Every row always shows **temperature, relative humidity and absolute humidity**; the first row is the outdoor air, so every room can be compared with it directly.
 
-| Element | Meaning |
-|---|---|
-| Coloured left edge + dot | The advice (see below) |
-| `→ 21°` under the temperature | The room's desired temperature. The value turns orange when too warm, blue when too cool |
-| `air → 43%` under the humidity | The relative humidity the outdoor air would have once inside at room temperature — i.e. what airing gets you |
-| Window icon | State of the window sensor, if configured |
+The temperature turns orange when the room is too warm and blue when too cool; the humidity turns cyan above the ceiling. A window icon shows the window sensor, if configured.
+
+Click a value to open the details of its sensor. Each room also shows when its sensors last updated; it turns amber when an update is overdue. The card learns how often each sensor normally updates from its history and, with the room opened, says when the next update is expected.
 
 | Colour | Hint | When |
 |---|---|---|
@@ -28,13 +25,15 @@ Every row always shows **temperature, relative humidity and absolute humidity**;
 | 🔴 red | **Close the window** | The window is open and is working against you |
 | ⚪ none | **All good** / keep closed | In range, or off target with no help from outside |
 
-### Graphs
+### Graph
 
-Click a room to open its graphs; any number of rooms can be open at once. The **Temp / RH / AH** buttons in the header choose which graphs are shown, in any combination. All graphs share one time axis (history ← now → forecast):
+Click a room to open its graph; any number of rooms can be open at once. It is a single graph with history left of *now* and the forecast to the right:
 
-- **Temperature** – room and outdoor, the desired temperature, and two predictions: *if closed* and *if ventilated*.
-- **Relative humidity** – room vs. *outdoor air at room temperature*, and the humidity ceiling. Whenever the outdoor line is below the room line, airing dries the room.
-- **Absolute humidity** – room vs. outdoor in g/m³.
+- thick lines are the room, thin lines the outdoor air, the dotted lines the desired temperature and the humidity ceiling;
+- the dashed temperature is the prediction, assuming you follow the card's advice;
+- each metric has its own vertical scale, given in the legend.
+
+Which metrics are drawn is set with `graph` in the card configuration.
 
 ### Learning
 
@@ -43,7 +42,7 @@ The predictions use a simple thermal model per room, `dT/dt = k·(T_out − T_in
 - `k` is how fast the room follows the outdoor temperature (its insulation), learned separately for hours with the window closed and open (if a window sensor is configured).
 - `gain` is one value per hour of the day and captures everything with a daily rhythm: sun on the windows, the heating schedule, people at home.
 
-Both are fitted to the last 14 days of hourly recorder statistics by comparing the same hour of day across days, so a sunny south-facing room and a shaded one get different predictions. This needs an outdoor temperature **sensor** with long-term statistics; until enough data exists, a generic model is used. The line under the graphs says which one is active.
+Both are fitted to the last 14 days of hourly recorder statistics by comparing the same hour of day across days, so a sunny south-facing room and a shaded one get different predictions. This needs an outdoor temperature **sensor** with long-term statistics; until enough data exists, a generic model is used. 
 
 ## Configuration
 
@@ -76,6 +75,7 @@ rooms:
 | `weather_entity` | string | – | `weather.*` entity; provides the forecast (needed for *wait*, end times and predictions) and is the fallback for outdoor values |
 | `outdoor_temperature` | string | – | Outdoor temperature sensor |
 | `outdoor_humidity` | string | – | Outdoor humidity sensor |
+| `graph` | list | `[temperature, humidity]` | Lines in the room graph: any of `temperature`, `humidity`, `absolute_humidity` |
 | `history_hours` | number | `24` | Hours of history in the graphs |
 | `forecast_hours` | number | `24` | Hours of forecast in the graphs |
 | `rooms` | list | **required** | Rooms, see below |

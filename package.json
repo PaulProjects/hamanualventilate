@@ -1,7 +1,7 @@
 {
   "name": "ventilation-card",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "packageManager": "yarn@4.12.0",
   "description": "A Home Assistant Lovelace card that provides smart manual ventilation guidance based on indoor/outdoor temperature and humidity",
   "keywords": [

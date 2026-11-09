@@ -1,6 +1,6 @@
 import { LitElement, html, svg, TemplateResult, PropertyValues, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import type { HomeAssistant, LovelaceCardEditor } from 'custom-card-helpers';
+import { fireEvent, type HomeAssistant, type LovelaceCardEditor } from 'custom-card-helpers';
 
 import type { VentilationCardConfig, RoomConfig, ForecastEntry } from './types';
 import {
@@ -13,13 +13,14 @@ import {
   DEFAULT_ROOM_ICON,
   DEFAULT_HISTORY_HOURS,
   DEFAULT_FORECAST_HOURS,
+  DEFAULT_GRAPH,
   LEARN_DAYS,
 } from './const';
 import { cardStyles } from './styles';
 import { localize } from './localize/localize';
-import { calculateAbsoluteHumidity, relativeHumidityAt } from './utils/humidity';
+import { calculateAbsoluteHumidity } from './utils/humidity';
 import { subscribeForecast } from './utils/forecast';
-import { fetchHistory, fetchHourlyMeans, toSeries, wasOn, combine, Series } from './utils/history';
+import { fetchHistory, fetchHourlyMeans, toSeries, wasOn, combine, medianGap, Series } from './utils/history';
 import { advise, learnModel, Advice, Model, Outdoor, DEFAULT_MODEL, TOLERANCE } from './utils/advice';
 
 console.info(
@@ -37,20 +38,26 @@ w.customCards.push({
 });
 
 const HOUR = 3.6e6;
-const REFRESH_MS = 10 * 60 * 1000;
+const MINUTE = 60 * 1000;
+const REFRESH_MS = 10 * MINUTE;
 const METRICS = ['t', 'rh', 'ah'] as const;
 type Metric = (typeof METRICS)[number];
 const UNIT: Record<Metric, string> = { t: '°C', rh: '%', ah: 'g/m³' };
 
+/** Config names for the metrics that can be drawn in the room graph. */
+const GRAPH_NAME: Record<Metric, string> = { t: 'temperature', rh: 'humidity', ah: 'absolute_humidity' };
+
 interface Line {
+  metric: Metric;
   pts: Series;
-  cls: 'in' | 'out' | 'go';
-  label: string;
+  outdoor?: boolean;
   dashed?: boolean;
 }
 
 const fmt = (v: number | null, digits = 1) => (v === null ? '–' : v.toFixed(digits));
 const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+/** Compact duration: "<1 min", "12 min", "3 h". */
+const duration = (ms: number) => (ms < MINUTE ? '<1 min' : ms < 90 * MINUTE ? `${Math.round(ms / MINUTE)} min` : `${Math.round(ms / HOUR)} h`);
 const toNum = (v: unknown): number | null => {
   const n = parseFloat(String(v));
   return isNaN(n) ? null : n;
@@ -71,9 +78,10 @@ export class VentilationCard extends LitElement {
   @state() private config!: VentilationCardConfig;
   @state() private _forecast: ForecastEntry[] = [];
   @state() private _expanded = new Set<number>();
-  @state() private _metrics = new Set<Metric>(['t', 'rh']);
   @state() private _hist: Record<string, Series> = {};
   @state() private _models: Model[] = [];
+  /** Learned typical update interval per sensor (ms). */
+  @state() private _interval: Record<string, number | null> = {};
 
   private _unsub?: () => void;
   private _subscribed?: string;
@@ -96,7 +104,12 @@ export class VentilationCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
-    this._timer = window.setInterval(() => this._load(), REFRESH_MS);
+    // Tick every minute so "x min ago" stays current; reload history every 10th tick
+    let ticks = 0;
+    this._timer = window.setInterval(() => {
+      this.requestUpdate();
+      if (++ticks % (REFRESH_MS / MINUTE) === 0) this._load();
+    }, MINUTE);
   }
 
   public disconnectedCallback(): void {
@@ -154,6 +167,7 @@ export class VentilationCard extends LitElement {
       c.history_hours ?? DEFAULT_HISTORY_HOURS,
     );
     this._hist = Object.fromEntries(Object.entries(raw).map(([id, r]) => [id, toSeries(r)]));
+    this._interval = Object.fromEntries(Object.entries(raw).map(([id, r]) => [id, medianGap(r)]));
 
     // ponytail: learning needs an outdoor temperature *sensor* with long-term statistics;
     // with only a weather entity the default model is used.
@@ -173,10 +187,10 @@ export class VentilationCard extends LitElement {
     return entityId ? toNum(this.hass.states[entityId]?.state) : null;
   }
 
-  private _toggle<T>(key: '_expanded' | '_metrics', value: T): void {
-    const next = new Set(this[key] as Set<T>);
-    if (!next.delete(value)) next.add(value);
-    (this[key] as Set<T>) = next;
+  private _toggle(idx: number): void {
+    const next = new Set(this._expanded);
+    if (!next.delete(idx)) next.add(idx);
+    this._expanded = next;
   }
 
   protected render(): TemplateResult | typeof nothing {
@@ -208,26 +222,13 @@ export class VentilationCard extends LitElement {
 
     return html`
       <ha-card>
-        <div class="header">
-          <span class="title">${c.title ?? localize('card.title_default')}</span>
-          <div class="metrics" role="group" aria-label=${localize('card.graphs')}>
-            ${METRICS.map(
-              (m) => html`
-                <button
-                  class="chip ${this._metrics.has(m) ? 'on' : ''}"
-                  aria-pressed=${this._metrics.has(m)}
-                  @click=${() => this._toggle('_metrics', m)}
-                >
-                  ${localize(`metric.${m}`)}
-                </button>
-              `,
-            )}
-          </div>
-        </div>
+        <div class="header"><span class="title">${c.title ?? localize('card.title_default')}</span></div>
         <div class="room outdoor">
           <div class="row">
             <div class="name"><ha-icon icon="mdi:weather-partly-cloudy"></ha-icon><span>${localize('card.outdoor')}</span></div>
-            ${this._stat(tOut, 't')} ${this._stat(rhOut, 'rh', 0)} ${this._stat(ahOut, 'ah')}
+            ${this._stat(tOut, 't', c.outdoor_temperature ?? c.weather_entity)}
+            ${this._stat(rhOut, 'rh', c.outdoor_humidity ?? c.weather_entity, 0)}
+            ${this._stat(ahOut, 'ah', c.outdoor_humidity ?? c.weather_entity)}
           </div>
         </div>
         ${c.rooms.map((room, i) => this._renderRoom(room, i, { now, tOut, rhOut, forecast, outT, outAh, span }))}
@@ -235,13 +236,31 @@ export class VentilationCard extends LitElement {
     `;
   }
 
-  private _stat(v: number | null, m: Metric, digits = 1, cls = '', sub = ''): TemplateResult {
+  /** A value; clicking it opens the sensor's details instead of the room graph. */
+  private _stat(v: number | null, m: Metric, entityId?: string, digits = 1, cls = ''): TemplateResult {
+    const content = html`${fmt(v, digits)}<small>${UNIT[m]}</small>`;
+    if (!entityId) return html`<div class="stat ${cls}">${content}</div>`;
     return html`
-      <div class="stat ${cls}">
-        <span class="value">${fmt(v, digits)}<small>${UNIT[m]}</small></span>
-        <span class="sub">${sub}</span>
-      </div>
+      <button
+        class="stat ${cls}"
+        aria-label="${localize(`metric.${m}`)}: ${localize('card.details')}"
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          fireEvent(this, 'hass-more-info', { entityId });
+        }}
+      >
+        ${content}
+      </button>
     `;
+  }
+
+  /** Time of the latest update of any of the given sensors. */
+  private _updatedAt(...ids: (string | undefined)[]): number | null {
+    const times = ids
+      .map((id) => this.hass.states[id ?? ''] as { last_reported?: string; last_updated?: string } | undefined)
+      .map((st) => Date.parse(st?.last_reported ?? st?.last_updated ?? ''))
+      .filter((t) => !isNaN(t));
+    return times.length ? Math.max(...times) : null;
   }
 
   private _renderRoom(
@@ -268,8 +287,12 @@ export class VentilationCard extends LitElement {
     if (a.until && a.action === 'wait') hint = localize('hint.wait', { time: clock(a.until) });
 
     const tCls = tIn === null ? '' : tIn > target + TOLERANCE ? 'warm' : tIn < target - TOLERANCE ? 'cold' : '';
+    const updated = this._updatedAt(room.temperature, room.humidity);
+    const age = updated === null ? null : Math.max(0, ctx.now - updated);
+    const every = this._interval[room.temperature] ?? this._interval[room.humidity ?? ''] ?? null;
+    const late = age !== null && every !== null && age > 3 * every && age > 5 * MINUTE;
     const expanded = this._expanded.has(idx);
-    const toggle = () => this._toggle('_expanded', idx);
+    const toggle = () => this._toggle(idx);
 
     return html`
       <div class="room ${a.action}">
@@ -279,7 +302,7 @@ export class VentilationCard extends LitElement {
           tabindex="0"
           aria-expanded=${expanded}
           @click=${toggle}
-          @keydown=${(e: KeyboardEvent) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggle())}
+          @keydown=${(e: KeyboardEvent) => e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggle())}
         >
           <div class="name">
             <ha-icon .icon=${room.icon || DEFAULT_ROOM_ICON}></ha-icon>
@@ -292,88 +315,71 @@ export class VentilationCard extends LitElement {
                 ></ha-icon>`
               : nothing}
           </div>
-          ${this._stat(tIn, 't', 1, tCls, `→ ${fmt(target, target % 1 ? 1 : 0)}°`)}
-          ${this._stat(rhIn, 'rh', 0, rhIn !== null && rhIn > maxRh ? 'humid' : '', a.rhAfter !== null ? localize('card.after_airing', { rh: fmt(a.rhAfter, 0) }) : '')}
-          ${this._stat(ahIn, 'ah')}
-          <div class="hint"><span class="dot"></span>${hint}</div>
+          ${this._stat(tIn, 't', room.temperature, 1, tCls)}
+          ${this._stat(rhIn, 'rh', room.humidity, 0, rhIn !== null && rhIn > maxRh ? 'humid' : '')}
+          ${this._stat(ahIn, 'ah', room.humidity)}
+          <div class="hint">
+            <span class="dot"></span><span class="text">${hint}</span>
+            ${age === null ? nothing : html`<span class="age ${late ? 'late' : ''}">${localize('card.ago', { time: duration(age) })}</span>`}
+          </div>
         </div>
-        ${expanded ? this._renderGraphs(room, a, model, { ...ctx, tIn, target, maxRh }) : nothing}
+        ${expanded
+          ? html`
+              ${this._chart(room, a, { ...ctx, tIn, target, maxRh })}
+              ${age === null || every === null
+                ? nothing
+                : html`<div class="note">
+                    ${localize('card.updates_every', { time: duration(every) })} ·
+                    ${age > every ? localize('card.overdue', { time: duration(age - every) }) : localize('card.next_in', { time: duration(every - age) })}
+                  </div>`}
+            `
+          : nothing}
       </div>
     `;
   }
 
-  private _renderGraphs(
+  /**
+   * One graph per room: every metric keeps its own vertical scale (given in the legend),
+   * room and outdoor share it. Left of "now" is history, right is the forecast — the
+   * dashed room temperature assumes the advice is followed.
+   */
+  private _chart(
     room: RoomConfig,
     a: Advice,
-    model: Model,
     ctx: { now: number; tIn: number | null; target: number; maxRh: number; outT: Series; outAh: Series; span: [number, number] },
   ): TemplateResult {
-    const inLabel = room.name;
-    const outLabel = localize('card.outdoor');
-    const roomT: Series = [...(this._hist[room.temperature] ?? []), ...(ctx.tIn !== null ? [[ctx.now, ctx.tIn] as [number, number]] : [])];
-    const roomRh = this._hist[room.humidity ?? ''] ?? [];
-    const ventilationChangesIt = a.open.some((p, i) => p[1] !== a.closed[i][1]);
-
-    const panels: Record<Metric, { lines: Line[]; ref?: number }> = {
-      t: {
-        ref: ctx.target,
-        lines: [
-          { pts: ctx.outT, cls: 'out', label: outLabel },
-          { pts: roomT, cls: 'in', label: inLabel },
-          { pts: a.closed, cls: 'in', label: localize('card.if_closed'), dashed: true },
-          ...(ventilationChangesIt ? [{ pts: a.open, cls: 'go', label: localize('card.if_ventilated'), dashed: true } as Line] : []),
-        ],
-      },
-      rh: {
-        ref: ctx.maxRh,
-        lines: [
-          // ponytail: uses the current room temperature for the whole curve; switch to the
-          // room temperature at each timestamp if rooms swing by many degrees.
-          ...(ctx.tIn !== null
-            ? [{ pts: ctx.outAh.map(([t, ah]): [number, number] => [t, relativeHumidityAt(ah, ctx.tIn!)]), cls: 'out', label: localize('card.outdoor_air_inside') } as Line]
-            : []),
-          { pts: roomRh, cls: 'in', label: inLabel },
-        ],
-      },
-      ah: {
-        lines: [
-          { pts: ctx.outAh, cls: 'out', label: outLabel },
-          { pts: combine(roomRh, roomT, (rh, t) => calculateAbsoluteHumidity(t, rh)), cls: 'in', label: inLabel },
-        ],
-      },
-    };
-
-    return html`
-      <div class="graphs">
-        ${METRICS.filter((m) => this._metrics.has(m)).map((m) => this._chart(m, panels[m].lines, ctx.span, ctx.now, panels[m].ref))}
-        ${this._metrics.size ? nothing : html`<div class="note">${localize('card.no_metric')}</div>`}
-        <div class="note">
-          ${model.learned
-            ? localize('card.model_learned', { days: String(LEARN_DAYS), closed: fmt(1 / model.kClosed, 0), open: fmt(1 / model.kOpen, 1), gain: (Math.max(...model.gain) > 0 ? '+' : '') + fmt(Math.max(...model.gain), 2) })
-            : localize('card.model_default')}
-        </div>
-      </div>
-    `;
-  }
-
-  /** One small-multiple panel: all panels share the same time axis so they can be read together. */
-  private _chart(metric: Metric, lines: Line[], span: [number, number], now: number, ref?: number): TemplateResult {
     const W = 300;
-    const H = 64;
-    const title = localize(`metric.${metric}_long`);
-    const visible = lines
-      .map((l) => ({ ...l, pts: l.pts.filter((p) => p[0] >= span[0] && p[0] <= span[1]) }))
-      .filter((l) => l.pts.length > 1);
-    const values = visible.flatMap((l) => l.pts.map((p) => p[1]));
-    if (!values.length) return html`<div class="note">${title}: ${localize('card.no_data')}</div>`;
+    const H = 100;
+    const { span, now } = ctx;
+    const wanted = this.config.graph ?? DEFAULT_GRAPH;
+    const roomT: Series = [...(this._hist[room.temperature] ?? []), ...(ctx.tIn !== null ? [[now, ctx.tIn] as [number, number]] : [])];
+    const roomRh = this._hist[room.humidity ?? ''] ?? [];
+    const ref: Partial<Record<Metric, number>> = { t: ctx.target, rh: ctx.maxRh };
+    const lines: Line[] = [
+      { metric: 't', pts: ctx.outT, outdoor: true },
+      { metric: 't', pts: roomT },
+      { metric: 't', pts: a.open, dashed: true },
+      { metric: 'rh', pts: roomRh },
+      { metric: 'ah', pts: ctx.outAh, outdoor: true },
+      { metric: 'ah', pts: combine(roomRh, roomT, (rh, t) => calculateAbsoluteHumidity(t, rh)) },
+    ];
 
-    let lo = Math.min(...values, ref ?? Infinity);
-    let hi = Math.max(...values, ref ?? -Infinity);
-    const pad = Math.max((hi - lo) * 0.1, 0.5);
-    lo -= pad;
-    hi += pad;
     const x = (t: number) => ((t - span[0]) / (span[1] - span[0])) * W;
-    const y = (v: number) => H - ((v - lo) / (hi - lo)) * H;
+    const groups = METRICS.filter((m) => wanted.includes(GRAPH_NAME[m]))
+      .map((m) => {
+        const own = lines
+          .filter((l) => l.metric === m)
+          .map((l) => ({ ...l, pts: l.pts.filter((p) => p[0] >= span[0] && p[0] <= span[1]) }))
+          .filter((l) => l.pts.length > 1);
+        const values = own.flatMap((l) => l.pts.map((p) => p[1]));
+        const lo = Math.min(...values, ref[m] ?? Infinity);
+        const hi = Math.max(...values, ref[m] ?? -Infinity);
+        const pad = Math.max((hi - lo) * 0.08, 0.5);
+        const y = (v: number) => H - ((v - lo + pad) / (hi - lo + 2 * pad)) * H;
+        return { m, own, lo, hi, y };
+      })
+      .filter((g) => g.own.length);
+    if (!groups.length) return html`<div class="note">${localize('card.no_data')}</div>`;
 
     const stepH = span[1] - span[0] > 60 * HOUR ? 12 : 6;
     const first = new Date(span[0]);
@@ -383,26 +389,24 @@ export class VentilationCard extends LitElement {
 
     return html`
       <div class="chart">
-        <div class="chart-head">
-          <span>${title} <small>${UNIT[metric]}</small></span>
-          <span class="legend">
-            ${visible.map((l) => html`<span class="${l.cls}"><i class=${l.dashed ? 'dashed' : ''}></i>${l.label}</span>`)}
-          </span>
+        <div class="legend">
+          ${groups.map(
+            (g) => html`<span class=${g.m}><i></i>${localize(`metric.${g.m}`)} ${fmt(g.lo, 0)}–${fmt(g.hi, 0)} ${UNIT[g.m]}</span>`,
+          )}
+          ${groups.some((g) => g.own.some((l) => l.outdoor)) ? html`<span><i class="thin"></i>${localize('card.outdoor')}</span>` : nothing}
         </div>
-        <div class="plot">
-          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label=${title}>
-            ${ticks.map((t) => svg`<line class="grid" x1=${x(t)} x2=${x(t)} y1="0" y2=${H} />`)}
-            <line class="now" x1=${x(now)} x2=${x(now)} y1="0" y2=${H} />
-            ${ref !== undefined ? svg`<line class="ref" x1="0" x2=${W} y1=${y(ref)} y2=${y(ref)} />` : nothing}
-            ${visible.map(
-              (l) => svg`<polyline class="${l.cls} ${l.dashed ? 'dashed' : ''}"
-                points=${l.pts.map((p) => `${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join(' ')} />`,
-            )}
-          </svg>
-          <span class="ymax">${fmt(hi, 0)}</span>
-          <span class="ymin">${fmt(lo, 0)}</span>
-          ${ref !== undefined ? html`<span class="yref" style="top:${(y(ref) / H) * 100}%">${fmt(ref, 0)}</span>` : nothing}
-        </div>
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label=${localize('card.graph', { room: room.name })}>
+          ${ticks.map((t) => svg`<line class="grid" x1=${x(t)} x2=${x(t)} y1="0" y2=${H} />`)}
+          <line class="now" x1=${x(now)} x2=${x(now)} y1="0" y2=${H} />
+          ${groups.map(
+            (g) => svg`
+              ${ref[g.m] !== undefined ? svg`<line class="ref ${g.m}" x1="0" x2=${W} y1=${g.y(ref[g.m]!)} y2=${g.y(ref[g.m]!)} />` : nothing}
+              ${g.own.map(
+                (l) => svg`<polyline class="${g.m} ${l.outdoor ? 'thin' : ''} ${l.dashed ? 'dashed' : ''}"
+                  points=${l.pts.map((p) => `${x(p[0]).toFixed(1)},${g.y(p[1]).toFixed(1)}`).join(' ')} />`,
+              )}`,
+          )}
+        </svg>
         <div class="ticks">
           ${ticks
             .filter((t) => Math.abs(x(t) - x(now)) > W * 0.06) // keep clear of the "now" label

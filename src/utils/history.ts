@@ -107,3 +107,9 @@ export function combine(a: Series, b: Series, fn: (x: number, y: number) => numb
   }
   return out;
 }
+
+/** Typical time between two sensor updates (median gap), or null with too little data. */
+export function medianGap(raw: RawHistory = []): number | null {
+  const gaps = raw.slice(1).map((r, i) => r[0] - raw[i][0]).sort((a, b) => a - b);
+  return gaps.length < 5 ? null : gaps[gaps.length >> 1];
+}

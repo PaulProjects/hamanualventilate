@@ -6,24 +6,19 @@
   "card": {
     "title_default": "Ventilation Guide",
     "outdoor": "Outdoor",
-    "graphs": "Graphs to show",
     "now": "now",
     "no_data": "no history yet",
-    "no_metric": "Pick a graph above: Temp, RH or AH",
-    "after_airing": "air → {rh}%",
-    "if_closed": "if closed",
-    "if_ventilated": "if ventilated",
-    "outdoor_air_inside": "Outdoor air at room temp",
-    "model_learned": "Prediction learned from {days} days: follows outdoor temperature in ~{closed} h closed, ~{open} h open; daily sun/heating pattern up to {gain} °C/h",
-    "model_default": "Prediction uses a generic room model (needs an outdoor temperature sensor and a few days of history to learn)"
+    "graph": "History and forecast for {room}",
+    "details": "show sensor details",
+    "ago": "{time} ago",
+    "updates_every": "Sensor updates about every {time}",
+    "next_in": "next in about {time}",
+    "overdue": "overdue by {time}"
   },
   "metric": {
-    "t": "Temp",
-    "rh": "RH",
-    "ah": "AH",
-    "t_long": "Temperature",
-    "rh_long": "Relative humidity",
-    "ah_long": "Absolute humidity"
+    "t": "Temperature",
+    "rh": "Humidity",
+    "ah": "Abs. humidity"
   },
   "hint": {
     "air": "Air out briefly",
@@ -61,6 +56,10 @@
     "temperature": "Temperature sensor",
     "humidity": "Humidity sensor",
     "window_sensor": "Window sensor",
-    "room_target_temperature": "Desired temperature (overrides the card setting)"
+    "room_target_temperature": "Desired temperature (overrides the card setting)",
+    "graph": "Lines in the room graph",
+    "graph_temperature": "Temperature",
+    "graph_humidity": "Relative humidity",
+    "graph_absolute_humidity": "Absolute humidity"
   }
 }
