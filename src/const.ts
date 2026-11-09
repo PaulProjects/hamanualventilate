@@ -1,7 +1,7 @@
 declare const __DEV__: boolean | undefined;
 export const IS_DEV = typeof __DEV__ !== 'undefined' ? Boolean(__DEV__) : false;
 
-export const CARD_VERSION = '2.0.0';
+export const CARD_VERSION = '0.1.0';
 export const CARD_NAME = IS_DEV ? 'ventilation-card-dev' : 'ventilation-card';
 export const CARD_EDITOR_NAME = IS_DEV ? 'ventilation-card-dev-editor' : 'ventilation-card-editor';
 

@@ -89,7 +89,7 @@ rooms:
 | `target_temperature` | number | Desired temperature for this room |
 | `icon` | string | Icon |
 
-### Upgrading from 1.x
+### Upgrading from 0.0.x
 
 Modes are gone. `goal`, `goal_entity`, the `*_temperature` mode limits, `min_humidity`, `ah_threshold`, the `show_*` switches, `insulation_factor`, `ventilation_speed` and the per-room `*_override` options are ignored and can be deleted. Set `target_temperature` instead.
 
