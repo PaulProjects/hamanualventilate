@@ -42,6 +42,7 @@
     "start": "rollup -c rollup.config.dev.js --watch",
     "build": "npm run clean && npm run rollup",
     "clean": "rm -rf dist",
-    "rollup": "rollup -c"
+    "rollup": "rollup -c",
+    "test": "esbuild src/utils/advice.test.ts --bundle --platform=node --format=esm | node --input-type=module"
   }
 }

@@ -1,158 +1,59 @@
 # Home Assistant Manual Ventilation Card (`custom:ventilation-card`)
 
-A modern, high-performance **Home Assistant Custom Lovelace Card** that guides users on when and how to manually ventilate their rooms to cool them down, keep heat in, or regulate humidity.
+A Home Assistant Lovelace card that shows the climate of each room next to the outdoor air and tells you, by colour, whether to **ventilate, air out briefly, wait, heat or close the window**.
 
----
+There are no modes. You set a desired temperature (per card, optionally per room) and a humidity ceiling; the same rules then do the right thing in every season:
 
-## 📋 Table of Contents
-1. [Overview](#overview)
-2. [Physics & Absolute Humidity Specification](#physics--absolute-humidity-specification)
-3. [Ventilation Goals & Modes Specification](#ventilation-goals--modes-specification)
-4. [Sensor Resolution & Fallback Hierarchy](#sensor-resolution--fallback-hierarchy)
-5. [Window Sensor Matrix](#window-sensor-matrix)
-6. [24-Hour Forecast & Time Window Algorithm](#24-hour-forecast--time-window-algorithm)
-7. [Diagnostics & System Health Badge](#diagnostics--system-health-badge)
-8. [YAML Configuration Reference](#yaml-configuration-reference)
-9. [Visual Editor Specification](#visual-editor-specification)
-10. [Installation & Development](#installation--development)
+- **Winter** – keeps humidity in check with short airings.
+- **Summer** – cools rooms when it is cooler outside, and tells you to wait when it is not yet.
+- **Spring / autumn** – warms rooms with outdoor air when that is warmer than inside.
 
----
+## What the card shows
 
-## 1. Overview
+Every row always shows **temperature, relative humidity and absolute humidity**; the first row is the outdoor air, so every room can be compared with it directly.
 
-Proper manual window ventilation requires comparing indoor and outdoor atmospheric conditions. Simply looking at relative humidity (%) can be misleading because warm air holds exponentially more moisture than cold air.
+| Element | Meaning |
+|---|---|
+| Coloured left edge + dot | The advice (see below) |
+| `→ 21°` under the temperature | The room's desired temperature. The value turns orange when too warm, blue when too cool |
+| `air → 43%` under the humidity | The relative humidity the outdoor air would have once inside at room temperature — i.e. what airing gets you |
+| Window icon | State of the window sensor, if configured |
 
-This card automatically calculates **Absolute Humidity ($g/m^3$)**, evaluates real-time temperatures, subscribes to **hourly weather forecasts**, and provides room-by-room ventilation advice alongside a **24-hour timeline bar**.
+| Colour | Hint | When |
+|---|---|---|
+| 🟢 green | **Air out briefly** | Room is above the humidity ceiling and outdoor air is drier. A few minutes are enough, so no duration is shown |
+| 🟢 green | **Ventilate to cool / warm up · until about HH:MM** | Outdoor air moves the room towards its desired temperature. The end time is when the target is reached or outdoor air stops helping |
+| 🟡 amber | **Wait — ventilate from about HH:MM** | Nothing to gain now, but the forecast says outdoor air will help within 12 hours |
+| 🟠 orange | **Heat** | Room is too cool and outdoor air will not help |
+| 🔴 red | **Close the window** | The window is open and is working against you |
+| ⚪ none | **All good** / keep closed | In range, or off target with no help from outside |
 
----
+### Graphs
 
-## 2. Physics & Absolute Humidity Specification
+Click a room to open its graphs; any number of rooms can be open at once. The **Temp / RH / AH** buttons in the header choose which graphs are shown, in any combination. All graphs share one time axis (history ← now → forecast):
 
-The card uses the **Magnus-Tetens formula** to compute saturation vapor pressure $E_s(T)$ and absolute humidity $AH(T, RH)$:
+- **Temperature** – room and outdoor, the desired temperature, and two predictions: *if closed* and *if ventilated*.
+- **Relative humidity** – room vs. *outdoor air at room temperature*, and the humidity ceiling. Whenever the outdoor line is below the room line, airing dries the room.
+- **Absolute humidity** – room vs. outdoor in g/m³.
 
-### Saturation Vapor Pressure $E_s(T)$
-$$E_s(T) = 6.112 \times \exp\left(\frac{17.67 \times T}{T + 243.5}\right) \quad [\text{hPa}]$$
+### Learning
 
-### Absolute Humidity $AH(T, RH)$
-$$AH(T, RH) = \frac{E_s(T) \times RH \times 2.1674}{273.15 + T} \quad [\text{g/m}^3]$$
+The predictions use a simple thermal model per room, `dT/dt = k·(T_out − T_in) + gain[hour]`:
 
-Where:
-- $T$ = Air temperature in °C
-- $RH$ = Relative humidity in % (0–100)
-- $AH$ = Absolute humidity in grams of water per cubic meter of air ($g/m^3$)
+- `k` is how fast the room follows the outdoor temperature (its insulation), learned separately for hours with the window closed and open (if a window sensor is configured).
+- `gain` is one value per hour of the day and captures everything with a daily rhythm: sun on the windows, the heating schedule, people at home.
 
-### Why Absolute Humidity is Essential
-If indoor air is 22°C at 60% RH ($AH \approx 11.6 \text{ g/m}^3$) and outdoor air is 30°C at 50% RH ($AH \approx 15.2 \text{ g/m}^3$), opening the window will **increase** indoor moisture even though outdoor relative humidity (50%) appears lower than indoor (60%). The card prevents this error.
+Both are fitted to the last 14 days of hourly recorder statistics by comparing the same hour of day across days, so a sunny south-facing room and a shaded one get different predictions. This needs an outdoor temperature **sensor** with long-term statistics; until enough data exists, a generic model is used. The line under the graphs says which one is active.
 
----
-
-## 3. Ventilation Goals & Modes Specification
-
-The card supports 4 distinct ventilation goals configured via `goal`:
-
-### 1. `cooling` (Summer Mode)
-- **Objective:** Cool room temperatures down using cooler outdoor air.
-- **Logic:**
-  - `T_indoor - T_outdoor > 1.5°C` $\rightarrow$ 🟢 **Open windows!** (*Draussen X.X°C kühler*)
-  - `0 < T_indoor - T_outdoor <= 1.5°C` $\rightarrow$ 🟡 **Borderline** (*Geringer Temperaturunterschied*)
-  - `T_outdoor >= T_indoor` $\rightarrow$ 🔴 **Keep closed** (*Draussen wärmer*)
-
-### 2. `warming` (Winter Mode)
-- **Objective:** Retain indoor heat while allowing brief ventilation to lower excessive humidity.
-- **Logic:**
-  - `AH_indoor - AH_outdoor > ah_threshold` AND `T_outdoor >= T_indoor` $\rightarrow$ 🟢 **Open windows!**
-  - `AH_indoor - AH_outdoor > ah_threshold` AND `T_outdoor < T_indoor` $\rightarrow$ 🟡 **Borderline** (*Lüften entfeuchtet, kühlt aber den Raum ab*)
-  - Otherwise $\rightarrow$ 🔴 **Keep closed** (*Würde den Raum auskühlen*)
-
-### 3. `humidity` (Moisture Regulation)
-- **Objective:** Reduce indoor humidity regardless of temperature.
-- **Logic:**
-  - `AH_indoor - AH_outdoor > ah_threshold` $\rightarrow$ 🟢 **Open windows!** (*Trockenere Luft draussen*)
-  - `0 < AH_indoor - AH_outdoor <= ah_threshold` $\rightarrow$ 🟡 **Borderline**
-  - `AH_outdoor >= AH_indoor` $\rightarrow$ 🔴 **Keep closed** (*Aussenluft ist feuchter*)
-
-### 4. `balanced` (Combined Mode — Recommended)
-- **Objective:** Primary temperature cooling when room exceeds `balanced_max_temperature`; secondary humidity regulation.
-- **Logic:**
-  - **Priority 1 (Overheating):** If `T_indoor > balanced_max_temperature` AND `T_outdoor < T_indoor` $\rightarrow$ 🟢 **Open windows!**
-  - **Priority 2 (High Moisture):** If `AH_indoor - AH_outdoor > ah_threshold` $\rightarrow$ 🟢 **Open windows!**
-  - **Priority 3 (Cooling Caution):** If `T_outdoor < T_indoor - 1.5°C` AND `T_indoor > balanced_max_temperature - 2°C` $\rightarrow$ 🟡 **Borderline**
-  - **Otherwise:** $\rightarrow$ 🔴 **Keep closed**
-
----
-
-## 4. Sensor Resolution & Fallback Hierarchy
-
-To determine outdoor temperature and humidity for a given room, the card resolves data in the following strict order:
-
-```
-[1. Room Outdoor Override] (outdoor_temperature_override / outdoor_humidity_override)
-         │ (if not specified)
-         ▼
-[2. Global Outdoor Sensor] (outdoor_temperature / outdoor_humidity)
-         │ (if not specified)
-         ▼
-[3. Weather Entity State] (weather_entity.attributes.temperature / humidity)
-```
-
----
-
-## 5. Window Sensor Matrix
-
-If a `window_sensor` (`binary_sensor` or contact sensor) is configured for a room, the card renders a status badge comparing window position to the current recommendation:
-
-| Recommendation | Window State | Badge Display | Meaning |
-|---|---|---|---|
-| 🟢 **Open windows!** | Open (`on`) | 🟢 **Open ✓** | Correct position |
-| 🟢 **Open windows!** | Closed (`off`) | 🔴 **Closed ✗** | **Action needed!** Open window now |
-| 🔴 **Keep closed** | Open (`on`) | 🔴 **Open ✗** | **Action needed!** Close window now |
-| 🔴 **Keep closed** | Closed (`off`) | 🟢 **Closed ✓** | Correct position |
-| 🟡 **Borderline** | Open / Closed | ⚪ **Open / Closed** | Neutral |
-
-If no window sensor is assigned to a room, no badge is rendered.
-
----
-
-## 6. 24-Hour Forecast & Time Window Algorithm
-
-The card subscribes to the weather entity's hourly forecast using `weather/subscribe_forecast` via WebSockets.
-
-### Timeline & Window Calculation per Room:
-1. Takes the upcoming 24 hourly forecast entries $(T_{fc}, RH_{fc})$.
-2. Evaluates the room's indoor conditions against each hour's outdoor forecast.
-3. Computes:
-   - **`ventilateUntil`** (HH:MM): The approximate time when outdoor conditions will no longer be favorable.
-   - **`ventilateFrom`** (HH:MM): The upcoming hour when outdoor conditions will become favorable (e.g. evening cool down at 21:00).
-   - **24-Slot Visual Timeline Bar:** 24 green/red horizontal segments depicting the day's ventilation windows.
-
----
-
-## 7. Diagnostics & System Health Badge
-
-If any sensor is unavailable, unknown, or misconfigured, the card displays a **Top-Right Warning Badge** (`⚠️ N issues`) in the card header:
-
-- Clicking the badge toggles the **Diagnostics Banner** listing all current issues:
-  - Missing/unavailable outdoor sensors
-  - Missing/unavailable room sensors
-  - Weather entity forecast errors
-- If any critical error occurs during rendering, an error boundary renders a clean Home Assistant error card showing the exact message instead of crashing.
-
----
-
-## 8. YAML Configuration Reference
-
-### Full Configuration Example
+## Configuration
 
 ```yaml
 type: custom:ventilation-card
-title: Ventilation Assistant
+title: Ventilation
 weather_entity: weather.home
 outdoor_temperature: sensor.outdoor_temperature
 outdoor_humidity: sensor.outdoor_humidity
-goal: balanced
-balanced_max_temperature: 23.5
-ah_threshold: 2.0
-min_humidity: 40
+target_temperature: 21
 max_humidity: 60
 rooms:
   - name: Living Room
@@ -164,58 +65,35 @@ rooms:
     icon: mdi:bed
     temperature: sensor.bedroom_temperature
     humidity: sensor.bedroom_humidity
-    window_sensor: binary_sensor.bedroom_window
-  - name: Kitchen (Balcony)
-    icon: mdi:stove
-    temperature: sensor.kitchen_temperature
-    humidity: sensor.kitchen_humidity
-    outdoor_temperature_override: sensor.balcony_temperature
-    outdoor_humidity_override: sensor.balcony_humidity
-    max_temperature_override: 22.0
+    target_temperature: 18
 ```
 
-### Options Reference
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `title` | string | `Ventilation Guide` | Card title |
+| `target_temperature` | number | `21` | Desired room temperature (°C) |
+| `max_humidity` | number | `60` | Relative humidity ceiling (%) |
+| `weather_entity` | string | – | `weather.*` entity; provides the forecast (needed for *wait*, end times and predictions) and is the fallback for outdoor values |
+| `outdoor_temperature` | string | – | Outdoor temperature sensor |
+| `outdoor_humidity` | string | – | Outdoor humidity sensor |
+| `history_hours` | number | `24` | Hours of history in the graphs |
+| `forecast_hours` | number | `24` | Hours of forecast in the graphs |
+| `rooms` | list | **required** | Rooms, see below |
 
-| Option | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `type` | string | **Yes** | `custom:ventilation-card` | Card identifier |
-| `title` | string | No | `Ventilation Guide` | Card header title |
-| `goal` | string | No | `cooling` | Default mode: `cooling`, `warming`, `humidity`, `balanced` |
-| `goal_entity` | string | No | `undefined` | Optional `input_select` or `select` entity to track and switch modes by clicking the header badge |
-| `cooling_min_temperature` | number | No | `18.0` | Minimum comfort temperature floor (°C) for Cooling mode |
-| `warming_max_temperature` | number | No | `23.0` | Maximum heating cap (°C) for Warming mode |
-| `balanced_max_temperature` | number | No | `24.0` | Target maximum temperature threshold (°C) for Balanced mode |
-| `min_humidity` | number | No | `30` | Minimum humidity lower limit (%) |
-| `max_humidity` | number | No | `60` | Maximum humidity upper limit (%) |
-| `ah_threshold` | number | No | `2.0` | Absolute humidity difference threshold ($g/m^3$) |
-| `weather_entity` | string | No | `undefined` | `weather.*` entity for 24h forecast |
-| `outdoor_temperature` | string | No | `undefined` | Global outdoor temperature sensor |
-| `outdoor_humidity` | string | No | `undefined` | Global outdoor humidity sensor |
-| `show_absolute_humidity` | boolean | No | `true` | Display absolute humidity ($g/m^3$) |
-| `show_forecast` | boolean | No | `true` | Display forecast summary chips |
-| `show_history` | boolean | No | `false` | Display sensor history in graph |
-| `show_humidity_slots` | boolean | No | `false` | Display upcoming humidity slot table in expanded details |
-| `show_next_state_change` | boolean | No | `true` | Show time to next open/closed state change |
-| `rooms` | array | **Yes** | `[]` | List of room configuration objects |
+| Room option | Type | Description |
+|---|---|---|
+| `name` | string | **Required.** Room name |
+| `temperature` | string | **Required.** Temperature sensor |
+| `humidity` | string | Humidity sensor |
+| `window_sensor` | string | `binary_sensor` that is `on` when the window is open |
+| `target_temperature` | number | Desired temperature for this room |
+| `icon` | string | Icon |
 
----
+### Upgrading from 1.x
 
-## 9. Visual Editor Specification
+Modes are gone. `goal`, `goal_entity`, the `*_temperature` mode limits, `min_humidity`, `ah_threshold`, the `show_*` switches, `insulation_factor`, `ventilation_speed` and the per-room `*_override` options are ignored and can be deleted. Set `target_temperature` instead.
 
-The card includes a comprehensive custom visual editor (`ventilation-card-editor`) featuring organized, always-visible configuration sections:
-- **General (Top Level):** Title, Default Mode selector, and Mode Entity (`input_select` / `select`) picker.
-- **Cooling Mode Settings:** Min. comfort temperature floor limit.
-- **Warming Mode Settings:** Max. heating temperature cap limit.
-- **Humidity Mode Settings:** Min./Max. humidity limits and absolute humidity threshold.
-- **Balanced Mode Settings:** Max. temperature threshold.
-- **Visuals:** Toggles for forecast, history, humidity slots, and state change countdown.
-- **Thermal Prediction:** Building insulation loss and ventilation exchange parameters.
-- **Outdoor Sensors:** Weather entity and outdoor temperature/humidity sensor pickers.
-- **Rooms:** Dynamic list with Add/Remove buttons, icon picker, entity pickers, and collapsible per-room override settings.
-
----
-
-## 10. Installation & Development
+## Installation & Development
 
 ### Method 1: Via HACS (Recommended)
 1. In Home Assistant, navigate to **HACS** → **Frontend**.

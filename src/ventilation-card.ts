@@ -2,39 +2,59 @@ import { LitElement, html, svg, TemplateResult, PropertyValues, nothing } from '
 import { customElement, property, state } from 'lit/decorators.js';
 import type { HomeAssistant, LovelaceCardEditor } from 'custom-card-helpers';
 
-import type { VentilationCardConfig, RoomConfig, RoomAdvice, ForecastEntry, SensorReadings, HealthIssue, ForecastWindow, VentilationWindowRange, PredictionPoint, VentilationGoal } from './types';
-import { VentilationStatus } from './types';
-import { CARD_VERSION, CARD_NAME, CARD_EDITOR_NAME, IS_DEV, DEFAULT_AH_THRESHOLD, DEFAULT_BALANCED_MAX_TEMP, DEFAULT_SHOW_HISTORY, DEFAULT_HISTORY_HOURS, DEFAULT_FORECAST_HOURS, DEFAULT_SHOW_HUMIDITY_SLOTS, DEFAULT_COOLING_MIN_TEMP, DEFAULT_WARMING_MAX_TEMP } from './const';
+import type { VentilationCardConfig, RoomConfig, ForecastEntry } from './types';
+import {
+  CARD_VERSION,
+  CARD_NAME,
+  CARD_EDITOR_NAME,
+  IS_DEV,
+  DEFAULT_TARGET_TEMPERATURE,
+  DEFAULT_MAX_HUMIDITY,
+  DEFAULT_ROOM_ICON,
+  DEFAULT_HISTORY_HOURS,
+  DEFAULT_FORECAST_HOURS,
+  LEARN_DAYS,
+} from './const';
 import { cardStyles } from './styles';
 import { localize } from './localize/localize';
-import { getVentilationAdvice, getSensorReadings, readSensor } from './utils/ventilation-logic';
-import { calculateAbsoluteHumidity } from './utils/humidity';
-import { subscribeForecast, extractForecastItems } from './utils/forecast';
-import { fetchHistoryFromHass, HistoryDataPoint } from './utils/history';
+import { calculateAbsoluteHumidity, relativeHumidityAt } from './utils/humidity';
+import { subscribeForecast } from './utils/forecast';
+import { fetchHistory, fetchHourlyMeans, toSeries, wasOn, combine, Series } from './utils/history';
+import { advise, learnModel, Advice, Model, Outdoor, DEFAULT_MODEL, TOLERANCE } from './utils/advice';
 
-/* ── Console banner ─────────────────────────────────────────── */
 console.info(
   `%c  VENTILATION-CARD${IS_DEV ? ' (DEV)' : ''} \n%c  ${localize('common.version')} ${CARD_VERSION}    `,
   'color: orange; font-weight: bold; background: black',
   'color: white; font-weight: bold; background: dimgray',
 );
 
-/* ── Card picker registration ───────────────────────────────── */
-interface WindowWithCustomCards extends Window {
-  customCards: Array<{ type: string; name: string; description: string }>;
-}
-
-(window as unknown as WindowWithCustomCards).customCards =
-  (window as unknown as WindowWithCustomCards).customCards || [];
-(window as unknown as WindowWithCustomCards).customCards.push({
+const w = window as unknown as { customCards?: Array<{ type: string; name: string; description: string }> };
+w.customCards = w.customCards || [];
+w.customCards.push({
   type: CARD_NAME,
   name: IS_DEV ? 'Ventilation Card (Dev)' : 'Ventilation Card',
-  description: IS_DEV
-    ? '[DEV] Smart manual ventilation guidance based on indoor/outdoor climate data'
-    : 'Smart manual ventilation guidance based on indoor/outdoor climate data',
+  description: 'Shows room climate and when to ventilate, heat or wait',
 });
 
-/* ── Main card element ──────────────────────────────────────── */
+const HOUR = 3.6e6;
+const REFRESH_MS = 10 * 60 * 1000;
+const METRICS = ['t', 'rh', 'ah'] as const;
+type Metric = (typeof METRICS)[number];
+const UNIT: Record<Metric, string> = { t: '°C', rh: '%', ah: 'g/m³' };
+
+interface Line {
+  pts: Series;
+  cls: 'in' | 'out' | 'go';
+  label: string;
+  dashed?: boolean;
+}
+
+const fmt = (v: number | null, digits = 1) => (v === null ? '–' : v.toFixed(digits));
+const clock = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const toNum = (v: unknown): number | null => {
+  const n = parseFloat(String(v));
+  return isNaN(n) ? null : n;
+};
 
 @customElement(CARD_NAME)
 export class VentilationCard extends LitElement {
@@ -44,2045 +64,352 @@ export class VentilationCard extends LitElement {
   }
 
   public static getStubConfig(): Record<string, unknown> {
-    return {
-      goal: 'cooling',
-      rooms: [{ name: 'Living Room', temperature: '' }],
-    };
+    return { target_temperature: DEFAULT_TARGET_TEMPERATURE, rooms: [{ name: 'Living Room', temperature: '' }] };
   }
 
   @property({ attribute: false }) public hass!: HomeAssistant;
   @state() private config!: VentilationCardConfig;
-  @state() private forecast: ForecastEntry[] = [];
-  @state() private _showHealthBanner = false;
-  @state() private _expandedRoomIndex: number | null = null;
-  @state() private _expandedOutdoor = false;
-  @state() private _outdoorHoverIndex: number | null = null;
-  @state() private _roomHoverIndices: Record<number, number | null> = {};
-  @state() private _historyData: Record<string, HistoryDataPoint[]> = {};
-  @state() private _modeMenuOpen = false;
+  @state() private _forecast: ForecastEntry[] = [];
+  @state() private _expanded = new Set<number>();
+  @state() private _metrics = new Set<Metric>(['t', 'rh']);
+  @state() private _hist: Record<string, Series> = {};
+  @state() private _models: Model[] = [];
 
-  private _forecastUnsub?: () => void;
-  private _subscribedEntity?: string;
-  private _historyLastFetched = 0;
+  private _unsub?: () => void;
+  private _subscribed?: string;
+  private _timer?: number;
+  private _loaded = false;
+  private _learnedAt = 0;
 
-  static get styles() {
-    return cardStyles;
-  }
+  static styles = cardStyles;
 
   public setConfig(config: VentilationCardConfig): void {
-    if (!config) {
-      throw new Error(localize('common.invalid_configuration'));
-    }
-    if (!config.rooms || config.rooms.length === 0) {
-      throw new Error('You must configure at least one room.');
-    }
+    if (!config?.rooms?.length) throw new Error(localize('common.invalid_configuration'));
+    this.config = config;
+    this._loaded = false;
+    this._learnedAt = 0;
+  }
 
-    this.config = {
-      ah_threshold: DEFAULT_AH_THRESHOLD,
-      cooling_min_temperature: DEFAULT_COOLING_MIN_TEMP,
-      warming_max_temperature: DEFAULT_WARMING_MAX_TEMP,
-      balanced_max_temperature: DEFAULT_BALANCED_MAX_TEMP,
-      show_absolute_humidity: true,
-      show_forecast: true,
-      show_history: DEFAULT_SHOW_HISTORY,
-      history_hours: DEFAULT_HISTORY_HOURS,
-      forecast_hours: DEFAULT_FORECAST_HOURS,
-      show_next_state_change: true,
-      show_humidity_slots: DEFAULT_SHOW_HUMIDITY_SLOTS,
-      insulation_factor: 0.05,
-      ventilation_speed: 0.35,
-      ...config,
-      goal: config.goal || 'cooling',
-    };
+  public getCardSize(): number {
+    return 2 + (this.config?.rooms.length ?? 0);
   }
 
   public connectedCallback(): void {
     super.connectedCallback();
-    this._subscribeForecast();
+    this._timer = window.setInterval(() => this._load(), REFRESH_MS);
   }
 
   public disconnectedCallback(): void {
     super.disconnectedCallback();
-    this._unsubscribeForecast();
+    window.clearInterval(this._timer);
+    this._unsub?.();
+    this._unsub = this._subscribed = undefined;
   }
 
-  protected shouldUpdate(changedProps: PropertyValues): boolean {
+  protected shouldUpdate(changed: PropertyValues): boolean {
     if (!this.config) return false;
-
-    if (
-      changedProps.has('config') ||
-      changedProps.has('forecast') ||
-      changedProps.has('_showHealthBanner') ||
-      changedProps.has('_expandedRoomIndex') ||
-      changedProps.has('_expandedOutdoor') ||
-      changedProps.has('_outdoorHoverIndex') ||
-      changedProps.has('_roomHoverIndices') ||
-      changedProps.has('_historyData') ||
-      changedProps.has('_modeMenuOpen')
-    ) {
-      return true;
-    }
-
-    if (changedProps.has('hass') && changedProps.size === 1) {
-      const oldHass = changedProps.get('hass') as HomeAssistant | undefined;
-      if (!oldHass) return true;
-
-      const trackedEntities = this._getTrackedEntities();
-      return trackedEntities.some((id) => oldHass.states?.[id] !== this.hass?.states?.[id]);
-    }
-
-    return true;
+    if (changed.size > 1 || !changed.has('hass')) return true;
+    const old = changed.get('hass') as HomeAssistant | undefined;
+    if (!old) return true;
+    const c = this.config;
+    return [
+      c.weather_entity,
+      c.outdoor_temperature,
+      c.outdoor_humidity,
+      ...c.rooms.flatMap((r) => [r.temperature, r.humidity, r.window_sensor]),
+    ].some((id) => id && old.states[id] !== this.hass.states[id]);
   }
 
-  protected updated(changedProps: PropertyValues): void {
-    super.updated(changedProps);
-    const targetEntity = this.config?.weather_entity;
-    if (changedProps.has('config') || changedProps.has('hass')) {
-      if (targetEntity !== this._subscribedEntity) {
-        this._unsubscribeForecast();
-        if (targetEntity && this.hass) {
-          this._subscribeForecast();
-        }
-      } else if (!this._forecastUnsub && targetEntity && this.hass) {
-        this._subscribeForecast();
-      }
-      if (this.config?.show_history !== false) {
-        this._fetchHistoryData();
-      }
+  protected updated(): void {
+    if (!this.hass || !this.config) return;
+    this._syncForecast();
+    if (!this._loaded) {
+      this._loaded = true;
+      this._load();
     }
   }
 
-  private async _fetchHistoryData(): Promise<void> {
-    if (!this.hass || !this.config || this.config.show_history === false) {
-      if (Object.keys(this._historyData).length > 0) {
-        this._historyData = {};
-      }
-      return;
-    }
+  private _syncForecast(): void {
+    const id = this.config.weather_entity;
+    if (id === this._subscribed) return;
+    this._unsub?.();
+    this._unsub = undefined;
+    this._subscribed = id;
+    this._forecast = [];
+    if (!id) return;
+    subscribeForecast(this.hass, id, (f) => this._subscribed === id && (this._forecast = f))
+      .then((unsub) => (this._subscribed === id ? (this._unsub = unsub) : unsub()))
+      .catch(() => undefined);
+  }
 
-    const historyHours = this.config.history_hours ?? DEFAULT_HISTORY_HOURS;
-    const now = Date.now();
-    if (now - this._historyLastFetched < 30000 && Object.keys(this._historyData).length > 0) {
-      return;
-    }
-    this._historyLastFetched = now;
+  /** Recent history for the graphs, plus (every few hours) the learned room models. */
+  private async _load(): Promise<void> {
+    const c = this.config;
+    const hass = this.hass;
+    if (!hass || !c) return;
+    const temps = c.rooms.map((r) => r.temperature);
+    const raw = await fetchHistory(
+      hass,
+      [c.outdoor_temperature, c.outdoor_humidity, ...temps, ...c.rooms.map((r) => r.humidity)],
+      c.history_hours ?? DEFAULT_HISTORY_HOURS,
+    );
+    this._hist = Object.fromEntries(Object.entries(raw).map(([id, r]) => [id, toSeries(r)]));
 
-    const entities: string[] = [];
-    if (this.config.outdoor_temperature) entities.push(this.config.outdoor_temperature);
-    if (this.config.outdoor_humidity) entities.push(this.config.outdoor_humidity);
+    // ponytail: learning needs an outdoor temperature *sensor* with long-term statistics;
+    // with only a weather entity the default model is used.
+    if (!c.outdoor_temperature || Date.now() - this._learnedAt < 6 * HOUR) return;
+    this._learnedAt = Date.now();
+    const [means, windows] = await Promise.all([
+      fetchHourlyMeans(hass, [c.outdoor_temperature, ...temps], LEARN_DAYS),
+      fetchHistory(hass, c.rooms.map((r) => r.window_sensor), LEARN_DAYS * 24),
+    ]);
+    const outdoor = means[c.outdoor_temperature] ?? [];
+    this._models = c.rooms.map((r) =>
+      learnModel(means[r.temperature] ?? [], outdoor, wasOn(windows[r.window_sensor ?? ''])),
+    );
+  }
 
-    for (const room of this.config.rooms || []) {
-      if (room.temperature) entities.push(room.temperature);
-      if (room.humidity) entities.push(room.humidity);
-      if (room.outdoor_temperature_override) entities.push(room.outdoor_temperature_override);
-      if (room.outdoor_humidity_override) entities.push(room.outdoor_humidity_override);
-    }
+  private _read(entityId?: string): number | null {
+    return entityId ? toNum(this.hass.states[entityId]?.state) : null;
+  }
 
-    const fetched = await fetchHistoryFromHass(this.hass, entities, historyHours);
-    this._historyData = fetched;
+  private _toggle<T>(key: '_expanded' | '_metrics', value: T): void {
+    const next = new Set(this[key] as Set<T>);
+    if (!next.delete(value)) next.add(value);
+    (this[key] as Set<T>) = next;
   }
 
   protected render(): TemplateResult | typeof nothing {
-    try {
-      if (!this.hass) {
-        return this._renderSkeleton();
-      }
+    if (!this.hass || !this.config) return nothing;
+    const c = this.config;
+    const now = Date.now();
+    const horizon = now + (c.forecast_hours ?? DEFAULT_FORECAST_HOURS) * HOUR;
+    const span: [number, number] = [now - (c.history_hours ?? DEFAULT_HISTORY_HOURS) * HOUR, horizon];
 
-      if (!this.config) {
-        return html`<ha-card><div class="card-content">No configuration</div></ha-card>`;
-      }
+    const weather = this.hass.states[c.weather_entity ?? '']?.attributes;
+    const tOut = this._read(c.outdoor_temperature) ?? toNum(weather?.temperature);
+    const rhOut = this._read(c.outdoor_humidity) ?? toNum(weather?.humidity);
+    const ahOut = tOut !== null && rhOut !== null ? calculateAbsoluteHumidity(tOut, rhOut) : null;
 
-      // Check system health & diagnostics
-      const healthIssues = this._getHealthIssues();
+    const forecast: Outdoor[] = this._forecast
+      .map((f) => ({ t: Date.parse(f.datetime), temp: f.temperature, rh: f.humidity }))
+      .filter((f) => f.t > now && f.t <= horizon)
+      .sort((a, b) => a.t - b.t);
 
-      // Compute outdoor readings (global) with weather entity fallback
-      const effectiveOutdoor = getSensorReadings(
-        this.hass,
-        this.config.outdoor_temperature,
-        this.config.outdoor_humidity,
-        this.config.weather_entity,
-      );
-
-      // Compute effective forecast: use WS forecast or fallback to weather entity attributes
-      const effectiveForecast = this._getEffectiveForecast();
-      const effectiveGoal = this._getEffectiveGoal();
-
-      // Compute room-specific advice & forecast window
-      const rooms = this.config.rooms || [];
-      const advices: RoomAdvice[] = rooms.map((room) =>
-        getVentilationAdvice(
-          this.hass,
-          room,
-          this.config.outdoor_temperature,
-          this.config.outdoor_humidity,
-          effectiveGoal,
-          this.config.ah_threshold,
-          this.config.balanced_max_temperature,
-          this.config.min_humidity,
-          this.config.max_humidity,
-          effectiveForecast,
-          this.config.weather_entity,
-          this.config.insulation_factor,
-          this.config.ventilation_speed,
-          this.config.forecast_hours,
-          this.config.cooling_min_temperature,
-          this.config.warming_max_temperature,
-        ),
-      );
-
-      return html`
-        <ha-card>
-          <div class="card-header-row">
-            <div class="card-header-title">
-              <ha-icon icon="mdi:air-filter" class="header-icon"></ha-icon>
-              <span>${this.config.title || localize('card.title_default')}</span>
-            </div>
-            ${this._renderGoalBadge(effectiveGoal)}
-          </div>
-
-          <div class="card-content">
-            ${this._showHealthBanner && healthIssues.length > 0
-          ? this._renderHealthBanner(healthIssues)
-          : nothing}
-
-            ${this._renderOutdoor(effectiveOutdoor)}
-
-            <div class="rooms-container">
-              ${advices.map((advice, idx) =>
-            this._renderRoom(advice, rooms[idx], idx),
-          )}
-            </div>
-          </div>
-        </ha-card>
-      `;
-    } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      console.error('VentilationCard render error:', err);
-      return html`
-        <ha-card style="padding: 16px;">
-          <div style="color: var(--error-color, red); font-weight: bold; margin-bottom: 8px;">
-            Ventilation Card Error
-          </div>
-          <div style="font-size: 12px; font-family: monospace; color: var(--primary-text-color);">
-            ${errorMsg}
-          </div>
-        </ha-card>
-      `;
-    }
-  }
-
-  private _handleMoreInfo(entityId?: string): void {
-    if (!entityId || !this.hass) return;
-    const event = new CustomEvent('hass-more-info', {
-      bubbles: true,
-      composed: true,
-      detail: { entityId },
-    });
-    this.dispatchEvent(event);
-  }
-
-  private _renderHealthBanner(issues: HealthIssue[]): TemplateResult {
-    return html`
-      <div class="health-banner">
-        <div class="health-banner-title">
-          <ha-icon icon="mdi:alert"></ha-icon>
-          <span>System Diagnostics (${issues.length})</span>
-        </div>
-        <ul class="health-issue-list">
-          ${issues.map(
-      (issue) => html`
-              <li class="health-issue-item severity-${issue.severity}">
-                <ha-icon icon="${issue.severity === 'error' ? 'mdi:close-circle' : 'mdi:alert-circle'}"></ha-icon>
-                <span>${issue.message}</span>
-              </li>
-            `,
-    )}
-        </ul>
-      </div>
-    `;
-  }
-
-  private _getEffectiveGoal(): VentilationGoal {
-    if (this.config.goal_entity && this.hass?.states?.[this.config.goal_entity]) {
-      const rawState = this.hass.states[this.config.goal_entity].state?.toLowerCase().trim();
-      if (rawState === 'cooling' || rawState === 'warming' || rawState === 'humidity' || rawState === 'balanced') {
-        return rawState as VentilationGoal;
-      }
-      if (rawState?.includes('cool')) return 'cooling';
-      if (rawState?.includes('warm') || rawState?.includes('heat')) return 'warming';
-      if (rawState?.includes('humid') || rawState?.includes('moist')) return 'humidity';
-      if (rawState?.includes('balanc')) return 'balanced';
-    }
-    return this.config.goal || 'cooling';
-  }
-
-  private _renderGoalBadge(goal: VentilationGoal): TemplateResult {
-    const goalLabel = localize(`goal.${goal}`);
-    let goalIcon = 'mdi:snowflake';
-
-    if (goal === 'warming') goalIcon = 'mdi:fire';
-    if (goal === 'humidity') goalIcon = 'mdi:water-percent';
-    if (goal === 'balanced') goalIcon = 'mdi:scale-balance';
-
-    const isInteractive = Boolean(this.config.goal_entity && this.hass?.states?.[this.config.goal_entity]);
-
-    const modes: Array<{ id: VentilationGoal; label: string; icon: string }> = [
-      { id: 'cooling', label: localize('goal.cooling'), icon: 'mdi:snowflake' },
-      { id: 'warming', label: localize('goal.warming'), icon: 'mdi:fire' },
-      { id: 'humidity', label: localize('goal.humidity'), icon: 'mdi:water-percent' },
-      { id: 'balanced', label: localize('goal.balanced'), icon: 'mdi:scale-balance' },
+    // Outdoor curves are shared by every room graph: history → now → forecast
+    const histT = this._hist[c.outdoor_temperature ?? ''] ?? [];
+    const histRh = this._hist[c.outdoor_humidity ?? ''] ?? [];
+    const outT: Series = [...histT, ...(tOut !== null ? [[now, tOut] as [number, number]] : []), ...forecast.map((f): [number, number] => [f.t, f.temp])];
+    const outAh: Series = [
+      ...combine(histRh, histT, (rh, t) => calculateAbsoluteHumidity(t, rh)),
+      ...(ahOut !== null ? [[now, ahOut] as [number, number]] : []),
+      ...forecast.filter((f) => f.rh != null).map((f): [number, number] => [f.t, calculateAbsoluteHumidity(f.temp, f.rh!)]),
     ];
 
     return html`
-      <div class="goal-badge-wrapper">
-        <div
-          class="goal-badge goal-${goal} ${isInteractive ? 'goal-badge--interactive' : ''}"
-          @click=${isInteractive ? this._toggleModeMenu : nothing}
-          title=${isInteractive ? 'Click to change ventilation mode' : ''}
-        >
-          <ha-icon icon="${goalIcon}"></ha-icon>
-          <span>${goalLabel}</span>
-          ${isInteractive
-            ? html`<ha-icon class="goal-badge__chevron" icon=${this._modeMenuOpen ? 'mdi:chevron-up' : 'mdi:chevron-down'}></ha-icon>`
-            : nothing}
+      <ha-card>
+        <div class="header">
+          <span class="title">${c.title ?? localize('card.title_default')}</span>
+          <div class="metrics" role="group" aria-label=${localize('card.graphs')}>
+            ${METRICS.map(
+              (m) => html`
+                <button
+                  class="chip ${this._metrics.has(m) ? 'on' : ''}"
+                  aria-pressed=${this._metrics.has(m)}
+                  @click=${() => this._toggle('_metrics', m)}
+                >
+                  ${localize(`metric.${m}`)}
+                </button>
+              `,
+            )}
+          </div>
         </div>
-
-        ${isInteractive && this._modeMenuOpen
-          ? html`
-              <div class="goal-dropdown-backdrop" @click=${this._closeModeMenu}></div>
-              <div class="goal-dropdown-menu">
-                ${modes.map(
-                  (m) => html`
-                    <button
-                      type="button"
-                      class="goal-dropdown-item ${m.id === goal ? 'goal-dropdown-item--selected' : ''}"
-                      @click=${(ev: Event) => {
-                        ev.stopPropagation();
-                        this._selectMode(m.id);
-                      }}
-                    >
-                      <ha-icon icon=${m.icon}></ha-icon>
-                      <span>${m.label}</span>
-                    </button>
-                  `,
-                )}
-              </div>
-            `
-          : nothing}
-      </div>
+        <div class="room outdoor">
+          <div class="row">
+            <div class="name"><ha-icon icon="mdi:weather-partly-cloudy"></ha-icon><span>${localize('card.outdoor')}</span></div>
+            ${this._stat(tOut, 't')} ${this._stat(rhOut, 'rh', 0)} ${this._stat(ahOut, 'ah')}
+          </div>
+        </div>
+        ${c.rooms.map((room, i) => this._renderRoom(room, i, { now, tOut, rhOut, forecast, outT, outAh, span }))}
+      </ha-card>
     `;
   }
 
-  private _toggleModeMenu = (ev: Event): void => {
-    ev.stopPropagation();
-    this._modeMenuOpen = !this._modeMenuOpen;
-  };
-
-  private _closeModeMenu = (ev: Event): void => {
-    ev.stopPropagation();
-    this._modeMenuOpen = false;
-  };
-
-  private async _selectMode(mode: VentilationGoal): Promise<void> {
-    this._modeMenuOpen = false;
-    const goalEntity = this.config.goal_entity;
-    if (!goalEntity || !this.hass) return;
-
-    const stateObj = this.hass.states[goalEntity];
-    const domain = goalEntity.split('.')[0] || 'input_select';
-
-    let optionToSet: string = mode;
-    const options: string[] = stateObj?.attributes?.options || [];
-    if (options.length > 0) {
-      const match = options.find((opt) => {
-        const lower = opt.toLowerCase();
-        if (mode === 'cooling' && lower.includes('cool')) return true;
-        if (mode === 'warming' && (lower.includes('warm') || lower.includes('heat'))) return true;
-        if (mode === 'humidity' && (lower.includes('humid') || lower.includes('moist'))) return true;
-        if (mode === 'balanced' && lower.includes('balanc')) return true;
-        return lower === mode;
-      });
-      if (match) {
-        optionToSet = match;
-      }
-    }
-
-    try {
-      const serviceDomain = domain === 'select' ? 'select' : 'input_select';
-      await this.hass.callService(serviceDomain, 'select_option', {
-        entity_id: goalEntity,
-        option: optionToSet,
-      });
-    } catch (err) {
-      console.error(`Failed to change mode for ${goalEntity}:`, err);
-    }
-  }
-
-  private _findClosestPointIndex(e: MouseEvent, points: Array<{ x: number }>): number {
-    const svg = e.currentTarget as SVGElement;
-    const rect = svg.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const targetX = ratio * 500;
-
-    let closestIdx = 0;
-    let minDiff = Infinity;
-    for (let i = 0; i < points.length; i++) {
-      const diff = Math.abs(points[i].x - targetX);
-      if (diff < minDiff) {
-        minDiff = diff;
-        closestIdx = i;
-      }
-    }
-    return closestIdx;
-  }
-
-  private _handleOutdoorMouseMove(e: MouseEvent, points: Array<{ x: number }>): void {
-    if (!points || points.length === 0) return;
-    const closestIdx = this._findClosestPointIndex(e, points);
-    if (this._outdoorHoverIndex !== closestIdx) {
-      this._outdoorHoverIndex = closestIdx;
-    }
-  }
-
-  private _handleOutdoorMouseLeave(): void {
-    if (this._outdoorHoverIndex !== null) {
-      this._outdoorHoverIndex = null;
-    }
-  }
-
-  private _handleRoomMouseMove(e: MouseEvent, roomIdx: number, points: Array<{ x: number }>): void {
-    if (!points || points.length === 0) return;
-    const closestIdx = this._findClosestPointIndex(e, points);
-    if (this._roomHoverIndices[roomIdx] !== closestIdx) {
-      this._roomHoverIndices = { ...this._roomHoverIndices, [roomIdx]: closestIdx };
-    }
-  }
-
-  private _handleRoomMouseLeave(roomIdx: number): void {
-    if (this._roomHoverIndices[roomIdx] !== null) {
-      this._roomHoverIndices = { ...this._roomHoverIndices, [roomIdx]: null };
-    }
-  }
-
-  private _renderOutdoor(outdoor: SensorReadings): TemplateResult {
-    const tempEntity = this.config.outdoor_temperature || this.config.weather_entity;
-    const humidityEntity = this.config.outdoor_humidity || this.config.weather_entity;
-    const mainEntity = tempEntity || humidityEntity || this.config.weather_entity;
-
-    let weatherStateText = '';
-    if (this.config.weather_entity && this.hass?.states[this.config.weather_entity]) {
-      const wState = this.hass.states[this.config.weather_entity];
-      weatherStateText = wState.state ? wState.state.replace(/-/g, ' ') : '';
-    }
-
+  private _stat(v: number | null, m: Metric, digits = 1, cls = '', sub = ''): TemplateResult {
     return html`
-      <div class="outdoor-section ${this._expandedOutdoor ? 'is-expanded' : ''}">
-        <div
-          class="outdoor-header"
-          @click=${(e: Event) => this._toggleOutdoorExpand(e)}
-          title="${this._expandedOutdoor ? 'Collapse outdoor details' : 'Expand outdoor details & forecast'}"
-        >
-          <div class="outdoor-title-group">
-            <div class="outdoor-icon-avatar">
-              <ha-icon icon="mdi:home-export-outline"></ha-icon>
-            </div>
-            <span class="outdoor-name">${localize('card.outdoor')}</span>
-          </div>
-
-          <div class="outdoor-header-badges">
-            ${outdoor.temperature !== null
-        ? html`
-                  <div
-                    class="climate-pill-badge ${tempEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (tempEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(tempEntity);
-            }
-          }}
-                    title="Outdoor climate summary"
-                  >
-                    <ha-icon icon="mdi:thermometer"></ha-icon>
-                    <span>${outdoor.temperature.toFixed(1)}°C</span>
-                    ${outdoor.humidity !== null
-            ? html`
-                          <ha-icon icon="mdi:water-percent" class="pill-humidity-icon"></ha-icon>
-                          <span>${outdoor.humidity.toFixed(0)}%</span>
-                        `
-            : nothing}
-                  </div>
-                `
-        : nothing}
-
-            ${weatherStateText
-        ? html`
-                  <div
-                    class="outdoor-weather-badge ${this.config.weather_entity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (this.config.weather_entity) {
-              e.stopPropagation();
-              this._handleMoreInfo(this.config.weather_entity);
-            }
-          }}
-                    title="${this.config.weather_entity ? `View weather for ${this.config.weather_entity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:weather-partly-cloudy"></ha-icon>
-                    <span>${weatherStateText}</span>
-                  </div>
-                `
-        : nothing}
-
-            <div
-              class="outdoor-details-trigger ${this._expandedOutdoor ? 'expanded' : ''}"
-              @click=${(e: Event) => this._toggleOutdoorExpand(e)}
-              title="${this._expandedOutdoor ? 'Collapse outdoor details' : 'Expand outdoor details & forecast'}"
-            >
-              <ha-icon icon="${this._expandedOutdoor ? 'mdi:chevron-up' : 'mdi:chevron-down'}"></ha-icon>
-            </div>
-          </div>
-        </div>
-
-        ${this._expandedOutdoor
-        ? html`
-              <div class="outdoor-expanded-panel" @click=${(e: Event) => e.stopPropagation()}>
-                ${this._renderOutdoorForecastGraph(outdoor)}
-              </div>
-            `
-        : nothing}
-      </div>
-    `;
-  }
-
-  private _renderOutdoorForecastGraph(outdoor: SensorReadings): TemplateResult {
-    const forecastHours = this.config.forecast_hours ?? DEFAULT_FORECAST_HOURS;
-    const historyHours = this.config.history_hours ?? DEFAULT_HISTORY_HOURS;
-    const showHistory = this.config.show_history ?? DEFAULT_SHOW_HISTORY;
-
-    const allForecast = this._getEffectiveForecast();
-
-    interface GraphItem {
-      datetime: string;
-      date: Date;
-      dateMs: number;
-      temperature: number;
-      humidity?: number;
-      isHistory?: boolean;
-    }
-
-    const items: GraphItem[] = [];
-    const now = new Date();
-    const nowMs = now.getTime();
-    const historyStartMs = nowMs - historyHours * 3600 * 1000;
-    const forecastLimitMs = nowMs + forecastHours * 3600 * 1000;
-
-    const outdoorTempEntity = this.config.outdoor_temperature;
-    const outdoorHumEntity = this.config.outdoor_humidity;
-
-    if (showHistory && outdoorTempEntity && this._historyData[outdoorTempEntity]) {
-      const tempHist = this._historyData[outdoorTempEntity] || [];
-      const humHist = outdoorHumEntity ? (this._historyData[outdoorHumEntity] || []) : [];
-
-      for (const hp of tempHist) {
-        const hpDate = toDate(hp.date || hp.datetime);
-        const hpMs = hpDate.getTime();
-        if (!isNaN(hpMs) && hpMs >= historyStartMs && hpMs <= nowMs) {
-          let humVal: number | undefined = undefined;
-          if (humHist.length > 0) {
-            let minHDiff = Infinity;
-            for (const hhp of humHist) {
-              const hhpMs = toDate(hhp.date || hhp.datetime).getTime();
-              const hDiff = Math.abs(hhpMs - hpMs);
-              if (hDiff < minHDiff) {
-                minHDiff = hDiff;
-                humVal = hhp.state;
-              }
-            }
-          }
-          items.push({
-            datetime: hp.datetime,
-            date: hpDate,
-            dateMs: hpMs,
-            temperature: hp.state,
-            humidity: humVal,
-            isHistory: true,
-          });
-        }
-      }
-    }
-
-    // Add current outdoor reading if available
-    if (outdoor.temperature !== null) {
-      items.push({
-        datetime: now.toISOString(),
-        date: now,
-        dateMs: nowMs,
-        temperature: outdoor.temperature,
-        humidity: outdoor.humidity ?? undefined,
-        isHistory: false,
-      });
-    }
-
-    // Add future forecast entries
-    for (const f of allForecast) {
-      const fDate = toDate(f.datetime);
-      const fMs = fDate.getTime();
-      if (!isNaN(fMs) && fMs > nowMs && fMs <= forecastLimitMs + 3600 * 1000) {
-        items.push({
-          datetime: f.datetime,
-          date: fDate,
-          dateMs: fMs,
-          temperature: f.temperature,
-          humidity: f.humidity,
-          isHistory: false,
-        });
-      }
-    }
-
-    items.sort((a, b) => a.dateMs - b.dateMs);
-
-    if (items.length === 0) {
-      return html`
-        <div class="outdoor-forecast-empty">
-          <ha-icon icon="mdi:chart-line-variant"></ha-icon>
-          <span>No weather temperature data available</span>
-        </div>
-      `;
-    }
-
-    const temps = items.map((f) => f.temperature);
-    const rawMin = Math.min(...temps);
-    const rawMax = Math.max(...temps);
-    const pad = Math.max(1, (rawMax - rawMin) * 0.15);
-    const minTemp = Math.floor(rawMin - pad);
-    const maxTemp = Math.ceil(rawMax + pad);
-    const tempRange = maxTemp - minTemp || 1;
-
-    const width = 500;
-    const height = 90;
-    const marginTop = 10;
-    const marginBottom = 10;
-    const usableHeight = height - marginTop - marginBottom;
-
-    const tMin = items[0].dateMs;
-    const tMax = items[items.length - 1].dateMs;
-    const tRange = tMax - tMin || 1;
-
-    const points = items.map((item) => {
-      const x = (item.dateMs - tMin) / tRange * width;
-      const norm = (item.temperature - minTemp) / tempRange;
-      const y = height - marginBottom - norm * usableHeight;
-      return { x, y, dateMs: item.dateMs, item };
-    });
-
-    const nowX = (nowMs - tMin) / tRange * width;
-    const hasHistoryPoints = items.some((i) => i.isHistory);
-
-    const { pastPts, futurePts } = splitPointsByTime(points, nowMs);
-
-    const pastPath = buildSplinePath(pastPts);
-    const futurePath = buildSplinePath(futurePts);
-    const fullLinePath = buildSplinePath(points);
-    const fillPath = `${fullLinePath} L ${points[points.length - 1].x.toFixed(1)},${height} L ${points[0].x.toFixed(1)},${height} Z`;
-
-    const step = Math.max(1, Math.floor(points.length / 4));
-    const timeLabels = points
-      .filter((_, idx) => idx % step === 0 || idx === points.length - 1)
-      .map((p) => p.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-
-    const hoverPoint = this._outdoorHoverIndex !== null && points[this._outdoorHoverIndex]
-      ? points[this._outdoorHoverIndex]
-      : null;
-
-    const showAbsHum = this.config.show_absolute_humidity !== false;
-    const tempEntity = outdoorTempEntity || this.config.weather_entity;
-    const humidityEntity = outdoorHumEntity || this.config.weather_entity;
-
-    const displayTemp = hoverPoint ? hoverPoint.item.temperature : outdoor.temperature;
-    const displayHum = hoverPoint
-      ? (hoverPoint.item.humidity ?? outdoor.humidity)
-      : outdoor.humidity;
-    const displayAbsHum = hoverPoint
-      ? (displayTemp !== null && displayHum !== null && displayHum !== undefined
-        ? calculateAbsoluteHumidity(displayTemp, displayHum)
-        : outdoor.absoluteHumidity)
-      : outdoor.absoluteHumidity;
-
-    return html`
-      <div class="integrated-graph-card">
-        <div class="graph-floating-header">
-          <div class="graph-current-stats">
-            ${displayTemp !== null
-        ? html`
-                  <div
-                    class="weighty-stat ${tempEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (tempEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(tempEntity);
-            }
-          }}
-                    title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:thermometer" class="stat-icon temp"></ha-icon>
-                    <span class="weighty-value">${displayTemp.toFixed(1)}</span>
-                    <span class="weighty-unit">°C</span>
-                  </div>
-                `
-        : nothing}
-            ${displayHum !== null && displayHum !== undefined
-        ? html`
-                  <div
-                    class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (humidityEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(humidityEntity);
-            }
-          }}
-                    title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:water-percent" class="stat-icon hum"></ha-icon>
-                    <span class="weighty-value">${displayHum.toFixed(0)}</span>
-                    <span class="weighty-unit">%</span>
-                  </div>
-                `
-        : nothing}
-            ${showAbsHum && displayAbsHum !== null && displayAbsHum !== undefined
-        ? html`
-                  <div
-                    class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (humidityEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(humidityEntity);
-            }
-          }}
-                    title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:water" class="stat-icon abs-hum"></ha-icon>
-                    <span class="weighty-value">${displayAbsHum.toFixed(1)}</span>
-                    <span class="weighty-unit">g/m³</span>
-                  </div>
-                `
-        : nothing}
-            ${hoverPoint
-        ? html`<span class="hover-time-tag">${hoverPoint.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${!hoverPoint.item.isHistory && hoverPoint.item.dateMs > nowMs ? ' (pred.)' : ''}</span>`
-        : nothing}
-          </div>
-        </div>
-
-        <div class="graph-svg-wrapper">
-          <svg
-            viewBox="0 0 ${width} ${height}"
-            preserveAspectRatio="none"
-            class="forecast-svg-chart"
-            @mousemove=${(e: MouseEvent) => this._handleOutdoorMouseMove(e, points)}
-            @mouseleave=${() => this._handleOutdoorMouseLeave()}
-            @touchmove=${(e: TouchEvent) => {
-        if (e.touches.length > 0) {
-          const touch = e.touches[0];
-          this._handleOutdoorMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, points);
-        }
-      }}
-            @touchend=${() => this._handleOutdoorMouseLeave()}
-          >
-            <defs>
-              <linearGradient id="outdoorTempGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="var(--primary-color, #2196f3)" stop-opacity="0.32" />
-                <stop offset="100%" stop-color="var(--primary-color, #2196f3)" stop-opacity="0.0" />
-              </linearGradient>
-            </defs>
-            ${fillPath ? svg`<path d="${fillPath}" fill="url(#outdoorTempGradient)" />` : nothing}
-
-            ${pastPath
-        ? svg`
-                  <path
-                    d="${pastPath}"
-                    fill="none"
-                    stroke="var(--primary-color, #2196f3)"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                `
-        : nothing}
-
-            ${futurePath
-        ? svg`
-                  <path
-                    d="${futurePath}"
-                    fill="none"
-                    stroke="var(--primary-color, #2196f3)"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-dasharray="4 3"
-                  />
-                `
-        : nothing}
-
-            ${!pastPath && !futurePath && fullLinePath
-        ? svg`
-                  <path
-                    d="${fullLinePath}"
-                    fill="none"
-                    stroke="var(--primary-color, #2196f3)"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-dasharray="4 3"
-                  />
-                `
-        : nothing}
-
-            ${hasHistoryPoints && nowX > 0 && nowX < width
-        ? svg`
-                  <line
-                    x1="${nowX.toFixed(1)}"
-                    y1="0"
-                    x2="${nowX.toFixed(1)}"
-                    y2="${height}"
-                    class="now-divider-line"
-                  />
-                `
-        : nothing}
-
-            ${hoverPoint
-        ? svg`
-                  <line
-                    x1="${hoverPoint.x.toFixed(1)}"
-                    y1="0"
-                    x2="${hoverPoint.x.toFixed(1)}"
-                    y2="${height}"
-                    class="hover-crosshair"
-                  />
-                  <circle
-                    cx="${hoverPoint.x.toFixed(1)}"
-                    cy="${hoverPoint.y.toFixed(1)}"
-                    r="4"
-                    class="hover-marker"
-                    stroke="var(--primary-color, #2196f3)"
-                  />
-                `
-        : nothing}
-          </svg>
-        </div>
-
-        <div class="graph-time-axis">
-          ${timeLabels.map((lbl) => html`<span>${lbl}</span>`)}
-        </div>
+      <div class="stat ${cls}">
+        <span class="value">${fmt(v, digits)}<small>${UNIT[m]}</small></span>
+        <span class="sub">${sub}</span>
       </div>
     `;
   }
 
   private _renderRoom(
-    advice: RoomAdvice,
-    room?: RoomConfig,
-    _index?: number,
+    room: RoomConfig,
+    idx: number,
+    ctx: { now: number; tOut: number | null; rhOut: number | null; forecast: Outdoor[]; outT: Series; outAh: Series; span: [number, number] },
   ): TemplateResult {
-    const tempEntity = room?.temperature;
-    const roomIdx = _index ?? 0;
-    const isExpanded = this._expandedRoomIndex === roomIdx;
+    const c = this.config;
+    const target = room.target_temperature ?? c.target_temperature ?? DEFAULT_TARGET_TEMPERATURE;
+    const maxRh = c.max_humidity ?? DEFAULT_MAX_HUMIDITY;
+    const tIn = this._read(room.temperature);
+    const rhIn = this._read(room.humidity);
+    const ahIn = tIn !== null && rhIn !== null ? calculateAbsoluteHumidity(tIn, rhIn) : null;
+    const windowState = room.window_sensor ? this.hass.states[room.window_sensor]?.state : undefined;
+    const model = this._models[idx] ?? DEFAULT_MODEL;
 
-    return html`
-      <div
-        class="room-row status-${advice.status} ${isExpanded ? 'is-expanded' : ''}"
-        @click=${(e: Event) => this._toggleRoomExpand(roomIdx, e)}       
-      >
-        <div class="room-header">
-          <div class="room-title-group">
-            <div class="room-icon-avatar status-${advice.status}">
-              <ha-icon icon="${advice.roomIcon}"></ha-icon>
-            </div>
-            <span class="room-name">${advice.roomName}</span>
-          </div>
-
-          <div class="room-header-badges">
-            ${advice.indoor.temperature !== null
-        ? html`
-                  <div
-                    class="climate-pill-badge ${tempEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (tempEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(tempEntity);
-            }
-          }}
-                    title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:thermometer"></ha-icon>
-                    <span>${advice.indoor.temperature.toFixed(1)}°C</span>
-                    ${advice.indoor.humidity !== null
-            ? html`
-                          <ha-icon icon="mdi:water-percent" class="pill-humidity-icon"></ha-icon>
-                          <span>${advice.indoor.humidity.toFixed(0)}%</span>
-                        `
-            : nothing}
-                  </div>
-                `
-        : nothing}
-
-            ${advice.windowState !== null
-        ? this._renderWindowBadge(advice, room)
-        : nothing}
-
-            ${this._renderSuggestionBadge(advice)}
-
-            <div
-              class="room-details-trigger ${isExpanded ? 'expanded' : ''}"
-              @click=${(e: Event) => this._toggleRoomExpand(roomIdx, e)}
-              title="${isExpanded ? 'Collapse details' : 'Expand details'}"
-            >
-              <ha-icon icon="${isExpanded ? 'mdi:chevron-up' : 'mdi:chevron-down'}"></ha-icon>
-            </div>
-          </div>
-        </div>
-
-        ${this.config.show_forecast !== false && advice.forecastWindow
-        ? this._renderCompactNextWindow(advice.forecastWindow, roomIdx)
-        : nothing}
-
-        ${isExpanded
-        ? this._renderExpandedRoomDetails(advice, room, roomIdx)
-        : nothing}
-      </div>
-    `;
-  }
-
-  private _toggleOutdoorExpand(e?: Event): void {
-    if (e) {
-      e.stopPropagation();
-    }
-    this._expandedOutdoor = !this._expandedOutdoor;
-    this.requestUpdate();
-  }
-
-  private _toggleRoomExpand(roomIndex: number, e?: Event): void {
-    if (e) {
-      e.stopPropagation();
-    }
-    this._expandedRoomIndex = this._expandedRoomIndex === roomIndex ? null : roomIndex;
-    this.requestUpdate();
-  }
-
-  private _renderCompactNextWindow(forecastWindow: ForecastWindow, roomIndex: number): TemplateResult {
-    const windows = forecastWindow.upcomingWindows || [];
-    const activeWin = windows.find((w) => w.isCurrent);
-    const nextWin = activeWin || windows[0];
-
-    if (!nextWin) {
-      return html`
-        <div
-          class="compact-next-window-chip"
-          @click=${(e: Event) => this._toggleRoomExpand(roomIndex, e)}
-          title="Click to toggle room climate details"
-        >
-          <ha-icon icon="mdi:clock-off-outline"></ha-icon>
-          <span>${localize('forecast.no_upcoming')}</span>
-        </div>
-      `;
-    }
-
-    if (activeWin) {
-      const activeText = localize('forecast.active_now', { time: activeWin.formattedEnd });
-      return html`
-        <div
-          class="compact-next-window-chip is-active"
-          @click=${(e: Event) => this._toggleRoomExpand(roomIndex, e)}
-          title="Click to toggle room climate details"
-        >
-          <ha-icon icon="mdi:clock-check-outline"></ha-icon>
-          <span>${activeText}</span>
-        </div>
-      `;
-    }
-
-    const nextText = localize('forecast.next_open', { start: nextWin.formattedStart, end: nextWin.formattedEnd });
-    return html`
-      <div
-        class="compact-next-window-chip"
-        @click=${(e: Event) => this._toggleRoomExpand(roomIndex, e)}
-        title="Click to toggle room climate details"
-      >
-        <ha-icon icon="mdi:clock-outline"></ha-icon>
-        <span>${nextText}</span>
-      </div>
-    `;
-  }
-
-  private _renderExpandedRoomDetails(advice: RoomAdvice, room?: RoomConfig, roomIdx?: number): TemplateResult {
-    const predictionSeries = advice.predictionSeries || [];
-    const index = roomIdx ?? 0;
-    const showHumiditySlots = this.config.show_humidity_slots ?? DEFAULT_SHOW_HUMIDITY_SLOTS;
-
-    return html`
-      <div class="room-expanded-panel" @click=${(e: Event) => e.stopPropagation()}>
-        ${predictionSeries.length > 0
-        ? this._renderRoomPredictionGraph(predictionSeries, index, advice, room)
-        : this._renderRoomFallbackStats(advice, room)}
-        ${showHumiditySlots && advice.forecastWindow
-        ? this._renderUpcomingWindows(advice.forecastWindow)
-        : nothing}
-      </div>
-    `;
-  }
-
-  private _renderRoomFallbackStats(advice: RoomAdvice, room?: RoomConfig): TemplateResult {
-    const showAbsHum = this.config.show_absolute_humidity !== false;
-    const tempEntity = room?.temperature;
-    const humidityEntity = room?.humidity || tempEntity;
-    const customOutdoorTemp = room?.outdoor_temperature_override;
-    const customOutdoorHum = room?.outdoor_humidity_override;
-    const outdoorClickEntity = customOutdoorTemp || customOutdoorHum || this.config.outdoor_temperature || this.config.weather_entity;
-
-    return html`
-      <div class="integrated-graph-card">
-        <div class="graph-floating-header">
-          <div class="graph-current-stats">
-            ${advice.indoor.temperature !== null
-        ? html`
-                  <div
-                    class="weighty-stat ${tempEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (tempEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(tempEntity);
-            }
-          }}
-                    title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:thermometer" class="stat-icon room-temp"></ha-icon>
-                    <span class="weighty-value">${advice.indoor.temperature.toFixed(1)}</span>
-                    <span class="weighty-unit">°C</span>
-                  </div>
-                `
-        : nothing}
-            ${advice.indoor.humidity !== null
-        ? html`
-                  <div
-                    class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (humidityEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(humidityEntity);
-            }
-          }}
-                    title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:water-percent" class="stat-icon hum"></ha-icon>
-                    <span class="weighty-value">${advice.indoor.humidity.toFixed(0)}</span>
-                    <span class="weighty-unit">%</span>
-                  </div>
-                `
-        : nothing}
-            ${showAbsHum && advice.indoor.absoluteHumidity !== null
-        ? html`
-                  <div
-                    class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (humidityEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(humidityEntity);
-            }
-          }}
-                    title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:water" class="stat-icon abs-hum"></ha-icon>
-                    <span class="weighty-value">${advice.indoor.absoluteHumidity.toFixed(1)}</span>
-                    <span class="weighty-unit">g/m³</span>
-                  </div>
-                `
-        : nothing}
-          </div>
-
-          ${advice.outdoor.temperature !== null
-        ? html`
-                <div
-                  class="graph-range-pill ${outdoorClickEntity ? 'clickable' : ''}"
-                  @click=${(e: Event) => {
-            if (outdoorClickEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(outdoorClickEntity);
-            }
-          }}
-                  title="${outdoorClickEntity ? `View details for ${outdoorClickEntity}` : ''}"
-                >
-                  <span>Outdoor: ${advice.outdoor.temperature.toFixed(1)}°C${advice.outdoor.humidity !== null && advice.outdoor.humidity !== undefined ? ` · ${advice.outdoor.humidity.toFixed(0)}%` : ''}${showAbsHum && advice.outdoor.absoluteHumidity !== null && advice.outdoor.absoluteHumidity !== undefined ? ` · ${advice.outdoor.absoluteHumidity.toFixed(1)} g/m³` : ''}</span>
-                </div>
-              `
-        : nothing}
-        </div>
-      </div>
-    `;
-  }
-
-  private _renderRoomPredictionGraph(
-    series: PredictionPoint[],
-    roomIdx: number,
-    advice: RoomAdvice,
-    room?: RoomConfig,
-  ): TemplateResult {
-    if (!series || series.length === 0) return html``;
-
-    const historyHours = this.config.history_hours ?? DEFAULT_HISTORY_HOURS;
-    const showHistory = this.config.show_history ?? DEFAULT_SHOW_HISTORY;
-    const forecastHours = this.config.forecast_hours ?? DEFAULT_FORECAST_HOURS;
-    const showAbsHum = this.config.show_absolute_humidity !== false;
-    const forecastWindow = advice.forecastWindow;
-
-    interface RoomGraphItem {
-      datetime: string;
-      date: Date;
-      dateMs: number;
-      predictedRoomTemp: number;
-      outdoorTemp: number;
-      canVentilate: boolean;
-      isHistory?: boolean;
-    }
-
-    const items: RoomGraphItem[] = [];
-    const now = new Date();
-    const nowMs = now.getTime();
-    const historyStartMs = nowMs - historyHours * 3600 * 1000;
-    const forecastLimitMs = nowMs + forecastHours * 3600 * 1000;
-
-    const tempEntity = room?.temperature;
-    const humidityEntity = room?.humidity || tempEntity;
-    const outdoorEntity = room?.outdoor_temperature_override || this.config.outdoor_temperature;
-    const outdoorClickEntity = outdoorEntity || room?.outdoor_humidity_override || this.config.weather_entity;
-
-    if (showHistory && tempEntity && this._historyData[tempEntity]) {
-      const roomHist = this._historyData[tempEntity] || [];
-      const outdoorHist = outdoorEntity ? (this._historyData[outdoorEntity] || []) : [];
-
-      for (const rPt of roomHist) {
-        const rDate = toDate(rPt.date || rPt.datetime);
-        const rMs = rDate.getTime();
-        if (!isNaN(rMs) && rMs >= historyStartMs && rMs <= nowMs) {
-          let outTemp = outdoorHist[0]?.state ?? rPt.state;
-          if (outdoorHist.length > 0) {
-            let minDiff = Infinity;
-            for (const oPt of outdoorHist) {
-              const oMs = toDate(oPt.date || oPt.datetime).getTime();
-              const diff = Math.abs(oMs - rMs);
-              if (diff < minDiff) {
-                minDiff = diff;
-                outTemp = oPt.state;
-              }
-            }
-          }
-          items.push({
-            datetime: rPt.datetime,
-            date: rDate,
-            dateMs: rMs,
-            predictedRoomTemp: rPt.state,
-            outdoorTemp: outTemp,
-            canVentilate: false,
-            isHistory: true,
-          });
-        }
-      }
-    }
-
-    // Add current indoor & outdoor reading if available
-    if (advice.indoor.temperature !== null && advice.outdoor.temperature !== null) {
-      items.push({
-        datetime: now.toISOString(),
-        date: now,
-        dateMs: nowMs,
-        predictedRoomTemp: advice.indoor.temperature,
-        outdoorTemp: advice.outdoor.temperature,
-        canVentilate: advice.forecastWindow?.canVentilateNow ?? (advice.status === VentilationStatus.VENTILATE_NOW),
-        isHistory: false,
-      });
-    }
-
-    // Add future series points
-    for (const s of series) {
-      const sDate = toDate(s.date || s.datetime);
-      const sMs = sDate.getTime();
-      if (!isNaN(sMs) && sMs > nowMs && sMs <= forecastLimitMs + 3600 * 1000) {
-        items.push({
-          datetime: s.datetime,
-          date: sDate,
-          dateMs: sMs,
-          predictedRoomTemp: s.predictedRoomTemp,
-          outdoorTemp: s.outdoorTemp,
-          canVentilate: s.canVentilate,
-          isHistory: false,
-        });
-      }
-    }
-
-    items.sort((a, b) => a.dateMs - b.dateMs);
-
-    if (items.length === 0) return html``;
-
-    const roomTemps = items.map((s) => s.predictedRoomTemp);
-    const outdoorTemps = items.map((s) => s.outdoorTemp);
-    const allTemps = [...roomTemps, ...outdoorTemps];
-    const rawMin = Math.min(...allTemps);
-    const rawMax = Math.max(...allTemps);
-    const pad = Math.max(1, (rawMax - rawMin) * 0.15);
-    const minTemp = Math.floor(rawMin - pad);
-    const maxTemp = Math.ceil(rawMax + pad);
-    const tempRange = maxTemp - minTemp || 1;
-
-    const width = 500;
-    const height = 90;
-    const marginTop = 10;
-    const marginBottom = 10;
-    const usableHeight = height - marginTop - marginBottom;
-
-    const tMin = items[0].dateMs;
-    const tMax = items[items.length - 1].dateMs;
-    const tRange = tMax - tMin || 1;
-
-    const points = items.map((item) => {
-      const x = (item.dateMs - tMin) / tRange * width;
-      const roomNorm = (item.predictedRoomTemp - minTemp) / tempRange;
-      const roomY = height - marginBottom - roomNorm * usableHeight;
-      const outdoorNorm = (item.outdoorTemp - minTemp) / tempRange;
-      const outdoorY = height - marginBottom - outdoorNorm * usableHeight;
-      return { x, roomY, outdoorY, dateMs: item.dateMs, item };
+    const a = advise({
+      now: ctx.now, tIn, rhIn, tOut: ctx.tOut, rhOut: ctx.rhOut, target, maxRh,
+      forecast: ctx.forecast, model, windowOpen: windowState === 'on',
     });
 
-    const nowX = (nowMs - tMin) / tRange * width;
-    const hasHistoryPoints = items.some((i) => i.isHistory);
+    let hint = localize(`hint.${a.action}${a.action === 'open' || (a.action === 'ok' && a.why) ? `_${a.why}` : ''}`);
+    if (a.until && a.action === 'open') hint += ` · ${localize('hint.until', { time: clock(a.until) })}`;
+    if (a.until && a.action === 'wait') hint = localize('hint.wait', { time: clock(a.until) });
 
-    const roomPts = points.map((p) => ({ x: p.x, y: p.roomY, dateMs: p.dateMs }));
-    const outdoorPts = points.map((p) => ({ x: p.x, y: p.outdoorY, dateMs: p.dateMs }));
-
-    const { pastPts: pastRoomPts, futurePts: futureRoomPts } = splitPointsByTime(roomPts, nowMs);
-    const { pastPts: pastOutdoorPts, futurePts: futureOutdoorPts } = splitPointsByTime(outdoorPts, nowMs);
-
-    const pastRoomPath = buildSplinePath(pastRoomPts);
-    const futureRoomPath = buildSplinePath(futureRoomPts);
-    const fullRoomPath = buildSplinePath(roomPts);
-    const fillRoomPath = fullRoomPath
-      ? `${fullRoomPath} L ${roomPts[roomPts.length - 1].x.toFixed(1)},${height} L ${roomPts[0].x.toFixed(1)},${height} Z`
-      : '';
-
-    const pastOutdoorPath = buildSplinePath(pastOutdoorPts);
-    const futureOutdoorPath = buildSplinePath(futureOutdoorPts);
-    const fullOutdoorPath = buildSplinePath(outdoorPts);
-
-    const isPointInOpenZone = (p: { item: RoomGraphItem }) => {
-      if (p.item.isHistory || p.item.dateMs < nowMs) return false;
-      if (p.item.canVentilate) return true;
-      if (p.item.outdoorTemp <= p.item.predictedRoomTemp + 0.1) return true;
-      if (forecastWindow?.upcomingWindows?.length) {
-        const t = p.item.dateMs;
-        return forecastWindow.upcomingWindows.some((w) => {
-          const wStart = Math.max(nowMs, toDate(w.start).getTime());
-          const wEnd = toDate(w.end).getTime();
-          return t >= wStart && t <= wEnd;
-        });
-      }
-      return false;
-    };
-
-    const openBands: Array<{ startX: number; endX: number }> = [];
-    let bandStartIdx: number | null = null;
-
-    for (let i = 0; i < points.length; i++) {
-      const isOpen = isPointInOpenZone(points[i]);
-      if (isOpen) {
-        if (bandStartIdx === null) bandStartIdx = i;
-        if (i === points.length - 1 && bandStartIdx !== null) {
-          const startX = points[bandStartIdx].x;
-          const endX = points[i].x;
-          openBands.push({ startX, endX });
-        }
-      } else {
-        if (bandStartIdx !== null) {
-          const startX = points[bandStartIdx].x;
-          const endX = points[i].x;
-          openBands.push({ startX, endX });
-          bandStartIdx = null;
-        }
-      }
-    }
-
-    if (forecastWindow?.upcomingWindows?.length && points.length > 1) {
-      const tStart = points[0].dateMs;
-      const tEnd = points[points.length - 1].dateMs;
-      const totalTime = tEnd - tStart;
-
-      if (totalTime > 0) {
-        for (const w of forecastWindow.upcomingWindows) {
-          const wStartMs = Math.max(nowMs, toDate(w.start).getTime());
-          const wEndMs = toDate(w.end).getTime();
-
-          if (wEndMs > Math.max(tStart, nowMs) && wStartMs < tEnd && wEndMs > wStartMs) {
-            const startRatio = Math.max(0, (wStartMs - tStart) / totalTime);
-            const endRatio = Math.min(1, (wEndMs - tStart) / totalTime);
-            const startX = startRatio * width;
-            const endX = endRatio * width;
-            if (endX > startX) {
-              openBands.push({ startX, endX });
-            }
-          }
-        }
-      }
-    }
-
-    const mergedBands: Array<{ startX: number; endX: number }> = [];
-    openBands.sort((a, b) => a.startX - b.startX);
-
-    for (const b of openBands) {
-      const clampedStartX = hasHistoryPoints ? Math.max(nowX, b.startX) : b.startX;
-      const clampedEndX = b.endX;
-      if (clampedEndX <= clampedStartX) continue;
-
-      if (mergedBands.length === 0) {
-        mergedBands.push({ startX: clampedStartX, endX: clampedEndX });
-      } else {
-        const last = mergedBands[mergedBands.length - 1];
-        if (clampedStartX <= last.endX + 5) {
-          last.endX = Math.max(last.endX, clampedEndX);
-        } else {
-          mergedBands.push({ startX: clampedStartX, endX: clampedEndX });
-        }
-      }
-    }
-
-    const step = Math.max(1, Math.floor(points.length / 4));
-    const timeLabels = points
-      .filter((_, idx) => idx % step === 0 || idx === points.length - 1)
-      .map((p) => p.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-
-    const hoverIdx = this._roomHoverIndices[roomIdx] ?? null;
-    const hoveredPoint = hoverIdx !== null && points[hoverIdx] ? points[hoverIdx] : null;
-
-    const displayRoomTemp = hoveredPoint
-      ? hoveredPoint.item.predictedRoomTemp
-      : advice.indoor.temperature;
-    const displayRoomHum = advice.indoor.humidity;
-    const displayRoomAbsHum = advice.indoor.absoluteHumidity;
-
-    const displayOutdoorTemp = hoveredPoint
-      ? hoveredPoint.item.outdoorTemp
-      : advice.outdoor.temperature;
-    const outdoorDisplayHumText = !hoveredPoint && advice.outdoor.humidity !== null && advice.outdoor.humidity !== undefined
-      ? ` · ${advice.outdoor.humidity.toFixed(0)}%`
-      : '';
-    const outdoorDisplayAbsHumText = !hoveredPoint && showAbsHum && advice.outdoor.absoluteHumidity !== null && advice.outdoor.absoluteHumidity !== undefined
-      ? ` · ${advice.outdoor.absoluteHumidity.toFixed(1)} g/m³`
-      : '';
+    const tCls = tIn === null ? '' : tIn > target + TOLERANCE ? 'warm' : tIn < target - TOLERANCE ? 'cold' : '';
+    const expanded = this._expanded.has(idx);
+    const toggle = () => this._toggle('_expanded', idx);
 
     return html`
-      <div class="integrated-graph-card">
-        <div class="graph-floating-header">
-          <div class="graph-current-stats">
-            ${displayRoomTemp !== null
-        ? html`
-                  <div
-                    class="weighty-stat ${tempEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (tempEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(tempEntity);
-            }
-          }}
-                    title="${tempEntity ? `View history graph for ${tempEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:thermometer" class="stat-icon room-temp"></ha-icon>
-                    <span class="weighty-value">${displayRoomTemp.toFixed(1)}</span>
-                    <span class="weighty-unit">°C</span>
-                  </div>
-                `
-        : nothing}
-            ${displayRoomHum !== null
-        ? html`
-                  <div
-                    class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (humidityEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(humidityEntity);
-            }
-          }}
-                    title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:water-percent" class="stat-icon hum"></ha-icon>
-                    <span class="weighty-value">${displayRoomHum.toFixed(0)}</span>
-                    <span class="weighty-unit">%</span>
-                  </div>
-                `
-        : nothing}
-            ${showAbsHum && displayRoomAbsHum !== null
-        ? html`
-                  <div
-                    class="weighty-stat ${humidityEntity ? 'clickable' : ''}"
-                    @click=${(e: Event) => {
-            if (humidityEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(humidityEntity);
-            }
-          }}
-                    title="${humidityEntity ? `View history graph for ${humidityEntity}` : ''}"
-                  >
-                    <ha-icon icon="mdi:water" class="stat-icon abs-hum"></ha-icon>
-                    <span class="weighty-value">${displayRoomAbsHum.toFixed(1)}</span>
-                    <span class="weighty-unit">g/m³</span>
-                  </div>
-                `
-        : nothing}
-            ${hoveredPoint
-        ? html`<span class="hover-time-tag">${hoveredPoint.item.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${!hoveredPoint.item.isHistory && hoveredPoint.item.dateMs > nowMs ? ' (pred.)' : ''}</span>`
-        : nothing}
+      <div class="room ${a.action}">
+        <div
+          class="row"
+          role="button"
+          tabindex="0"
+          aria-expanded=${expanded}
+          @click=${toggle}
+          @keydown=${(e: KeyboardEvent) => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), toggle())}
+        >
+          <div class="name">
+            <ha-icon .icon=${room.icon || DEFAULT_ROOM_ICON}></ha-icon>
+            <span>${room.name}</span>
+            ${windowState === 'on' || windowState === 'off'
+              ? html`<ha-icon
+                  class="window"
+                  .icon=${windowState === 'on' ? 'mdi:window-open-variant' : 'mdi:window-closed-variant'}
+                  title=${localize(`window.${windowState}`)}
+                ></ha-icon>`
+              : nothing}
           </div>
-
-          ${displayOutdoorTemp !== null
-        ? html`
-                <div
-                  class="graph-range-pill ${outdoorClickEntity ? 'clickable' : ''}"
-                  @click=${(e: Event) => {
-            if (outdoorClickEntity) {
-              e.stopPropagation();
-              this._handleMoreInfo(outdoorClickEntity);
-            }
-          }}
-                  title="${outdoorClickEntity ? `View details for ${outdoorClickEntity}` : ''}"
-                >
-                  <span>Outdoor: ${displayOutdoorTemp.toFixed(1)}°C${outdoorDisplayHumText}${outdoorDisplayAbsHumText}</span>
-                </div>
-              `
-        : nothing}
+          ${this._stat(tIn, 't', 1, tCls, `→ ${fmt(target, target % 1 ? 1 : 0)}°`)}
+          ${this._stat(rhIn, 'rh', 0, rhIn !== null && rhIn > maxRh ? 'humid' : '', a.rhAfter !== null ? localize('card.after_airing', { rh: fmt(a.rhAfter, 0) }) : '')}
+          ${this._stat(ahIn, 'ah')}
+          <div class="hint"><span class="dot"></span>${hint}</div>
         </div>
+        ${expanded ? this._renderGraphs(room, a, model, { ...ctx, tIn, target, maxRh }) : nothing}
+      </div>
+    `;
+  }
 
-        <div class="graph-svg-wrapper">
-          <svg
-            viewBox="0 0 ${width} ${height}"
-            preserveAspectRatio="none"
-            class="prediction-svg-chart"
-            @mousemove=${(e: MouseEvent) => this._handleRoomMouseMove(e, roomIdx, points)}
-            @mouseleave=${() => this._handleRoomMouseLeave(roomIdx)}
-            @touchmove=${(e: TouchEvent) => {
-        if (e.touches.length > 0) {
-          const touch = e.touches[0];
-          this._handleRoomMouseMove({ clientX: touch.clientX, currentTarget: e.currentTarget } as any, roomIdx, points);
-        }
-      }}
-            @touchend=${() => this._handleRoomMouseLeave(roomIdx)}
-          >
-            <defs>
-              <linearGradient id="roomTempGradient-${roomIdx}" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="var(--vc-green, #10b981)" stop-opacity="0.32" />
-                <stop offset="100%" stop-color="var(--vc-green, #10b981)" stop-opacity="0.0" />
-              </linearGradient>
-              <linearGradient id="openZoneGradient-${roomIdx}" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stop-color="var(--vc-green, #10b981)" stop-opacity="0.22" />
-                <stop offset="100%" stop-color="var(--vc-green, #10b981)" stop-opacity="0.02" />
-              </linearGradient>
-            </defs>
+  private _renderGraphs(
+    room: RoomConfig,
+    a: Advice,
+    model: Model,
+    ctx: { now: number; tIn: number | null; target: number; maxRh: number; outT: Series; outAh: Series; span: [number, number] },
+  ): TemplateResult {
+    const inLabel = room.name;
+    const outLabel = localize('card.outdoor');
+    const roomT: Series = [...(this._hist[room.temperature] ?? []), ...(ctx.tIn !== null ? [[ctx.now, ctx.tIn] as [number, number]] : [])];
+    const roomRh = this._hist[room.humidity ?? ''] ?? [];
+    const ventilationChangesIt = a.open.some((p, i) => p[1] !== a.closed[i][1]);
 
-            ${mergedBands.map(
-        (b) => svg`
-                <rect
-                  x="${b.startX.toFixed(1)}"
-                  y="0"
-                  width="${Math.max(2, b.endX - b.startX).toFixed(1)}"
-                  height="${height}"
-                  fill="url(#openZoneGradient-${roomIdx})"
-                  rx="3"
-                />
-              `,
-      )}
+    const panels: Record<Metric, { lines: Line[]; ref?: number }> = {
+      t: {
+        ref: ctx.target,
+        lines: [
+          { pts: ctx.outT, cls: 'out', label: outLabel },
+          { pts: roomT, cls: 'in', label: inLabel },
+          { pts: a.closed, cls: 'in', label: localize('card.if_closed'), dashed: true },
+          ...(ventilationChangesIt ? [{ pts: a.open, cls: 'go', label: localize('card.if_ventilated'), dashed: true } as Line] : []),
+        ],
+      },
+      rh: {
+        ref: ctx.maxRh,
+        lines: [
+          // ponytail: uses the current room temperature for the whole curve; switch to the
+          // room temperature at each timestamp if rooms swing by many degrees.
+          ...(ctx.tIn !== null
+            ? [{ pts: ctx.outAh.map(([t, ah]): [number, number] => [t, relativeHumidityAt(ah, ctx.tIn!)]), cls: 'out', label: localize('card.outdoor_air_inside') } as Line]
+            : []),
+          { pts: roomRh, cls: 'in', label: inLabel },
+        ],
+      },
+      ah: {
+        lines: [
+          { pts: ctx.outAh, cls: 'out', label: outLabel },
+          { pts: combine(roomRh, roomT, (rh, t) => calculateAbsoluteHumidity(t, rh)), cls: 'in', label: inLabel },
+        ],
+      },
+    };
 
-            ${fillRoomPath ? svg`<path d="${fillRoomPath}" fill="url(#roomTempGradient-${roomIdx})" />` : nothing}
+    return html`
+      <div class="graphs">
+        ${METRICS.filter((m) => this._metrics.has(m)).map((m) => this._chart(m, panels[m].lines, ctx.span, ctx.now, panels[m].ref))}
+        ${this._metrics.size ? nothing : html`<div class="note">${localize('card.no_metric')}</div>`}
+        <div class="note">
+          ${model.learned
+            ? localize('card.model_learned', { days: String(LEARN_DAYS), closed: fmt(1 / model.kClosed, 0), open: fmt(1 / model.kOpen, 1), gain: (Math.max(...model.gain) > 0 ? '+' : '') + fmt(Math.max(...model.gain), 2) })
+            : localize('card.model_default')}
+        </div>
+      </div>
+    `;
+  }
 
-            ${pastOutdoorPath
-        ? svg`
-                  <path
-                    d="${pastOutdoorPath}"
-                    fill="none"
-                    stroke="var(--primary-color, #2196f3)"
-                    stroke-width="1.8"
-                    opacity="0.85"
-                  />
-                `
-        : nothing}
+  /** One small-multiple panel: all panels share the same time axis so they can be read together. */
+  private _chart(metric: Metric, lines: Line[], span: [number, number], now: number, ref?: number): TemplateResult {
+    const W = 300;
+    const H = 64;
+    const title = localize(`metric.${metric}_long`);
+    const visible = lines
+      .map((l) => ({ ...l, pts: l.pts.filter((p) => p[0] >= span[0] && p[0] <= span[1]) }))
+      .filter((l) => l.pts.length > 1);
+    const values = visible.flatMap((l) => l.pts.map((p) => p[1]));
+    if (!values.length) return html`<div class="note">${title}: ${localize('card.no_data')}</div>`;
 
-            ${futureOutdoorPath
-        ? svg`
-                  <path
-                    d="${futureOutdoorPath}"
-                    fill="none"
-                    stroke="var(--primary-color, #2196f3)"
-                    stroke-width="1.8"
-                    stroke-dasharray="4 3"
-                    opacity="0.7"
-                  />
-                `
-        : nothing}
+    let lo = Math.min(...values, ref ?? Infinity);
+    let hi = Math.max(...values, ref ?? -Infinity);
+    const pad = Math.max((hi - lo) * 0.1, 0.5);
+    lo -= pad;
+    hi += pad;
+    const x = (t: number) => ((t - span[0]) / (span[1] - span[0])) * W;
+    const y = (v: number) => H - ((v - lo) / (hi - lo)) * H;
 
-            ${!pastOutdoorPath && !futureOutdoorPath && fullOutdoorPath
-        ? svg`
-                  <path
-                    d="${fullOutdoorPath}"
-                    fill="none"
-                    stroke="var(--primary-color, #2196f3)"
-                    stroke-width="1.8"
-                    stroke-dasharray="4 3"
-                    opacity="0.7"
-                  />
-                `
-        : nothing}
+    const stepH = span[1] - span[0] > 60 * HOUR ? 12 : 6;
+    const first = new Date(span[0]);
+    first.setHours(Math.ceil((first.getHours() + 1) / stepH) * stepH, 0, 0, 0);
+    const ticks: number[] = [];
+    for (let t = first.getTime(); t < span[1]; t += stepH * HOUR) ticks.push(t);
 
-            ${pastRoomPath
-        ? svg`
-                  <path
-                    d="${pastRoomPath}"
-                    fill="none"
-                    stroke="var(--vc-green, #10b981)"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  />
-                `
-        : nothing}
-
-            ${futureRoomPath
-        ? svg`
-                  <path
-                    d="${futureRoomPath}"
-                    fill="none"
-                    stroke="var(--vc-green, #10b981)"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-dasharray="4 3"
-                  />
-                `
-        : nothing}
-
-            ${!pastRoomPath && !futureRoomPath && fullRoomPath
-        ? svg`
-                  <path
-                    d="${fullRoomPath}"
-                    fill="none"
-                    stroke="var(--vc-green, #10b981)"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-dasharray="4 3"
-                  />
-                `
-        : nothing}
-
-            ${hasHistoryPoints && nowX > 0 && nowX < width
-        ? svg`
-                  <line
-                    x1="${nowX.toFixed(1)}"
-                    y1="0"
-                    x2="${nowX.toFixed(1)}"
-                    y2="${height}"
-                    class="now-divider-line"
-                  />
-                `
-        : nothing}
-
-            ${hoveredPoint
-        ? svg`
-                  <line
-                    x1="${hoveredPoint.x.toFixed(1)}"
-                    y1="0"
-                    x2="${hoveredPoint.x.toFixed(1)}"
-                    y2="${height}"
-                    class="hover-crosshair"
-                  />
-                  <circle
-                    cx="${hoveredPoint.x.toFixed(1)}"
-                    cy="${hoveredPoint.roomY.toFixed(1)}"
-                    r="4"
-                    class="hover-marker"
-                    stroke="var(--vc-green, #10b981)"
-                  />
-                  <circle
-                    cx="${hoveredPoint.x.toFixed(1)}"
-                    cy="${hoveredPoint.outdoorY.toFixed(1)}"
-                    r="3.5"
-                    class="hover-marker"
-                    stroke="var(--primary-color, #2196f3)"
-                  />
-                `
-        : nothing}
+    return html`
+      <div class="chart">
+        <div class="chart-head">
+          <span>${title} <small>${UNIT[metric]}</small></span>
+          <span class="legend">
+            ${visible.map((l) => html`<span class="${l.cls}"><i class=${l.dashed ? 'dashed' : ''}></i>${l.label}</span>`)}
+          </span>
+        </div>
+        <div class="plot">
+          <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label=${title}>
+            ${ticks.map((t) => svg`<line class="grid" x1=${x(t)} x2=${x(t)} y1="0" y2=${H} />`)}
+            <line class="now" x1=${x(now)} x2=${x(now)} y1="0" y2=${H} />
+            ${ref !== undefined ? svg`<line class="ref" x1="0" x2=${W} y1=${y(ref)} y2=${y(ref)} />` : nothing}
+            ${visible.map(
+              (l) => svg`<polyline class="${l.cls} ${l.dashed ? 'dashed' : ''}"
+                points=${l.pts.map((p) => `${x(p[0]).toFixed(1)},${y(p[1]).toFixed(1)}`).join(' ')} />`,
+            )}
           </svg>
+          <span class="ymax">${fmt(hi, 0)}</span>
+          <span class="ymin">${fmt(lo, 0)}</span>
+          ${ref !== undefined ? html`<span class="yref" style="top:${(y(ref) / H) * 100}%">${fmt(ref, 0)}</span>` : nothing}
         </div>
-
-        <div class="graph-time-axis">
-          ${timeLabels.map((lbl) => html`<span>${lbl}</span>`)}
-        </div>
-      </div>
-    `;
-  }
-
-  private _renderUpcomingWindows(forecastWindow: ForecastWindow): TemplateResult {
-    const windows = forecastWindow.upcomingWindows || [];
-    const weatherEntity = this.config?.weather_entity;
-
-    if (windows.length === 0) {
-      return html`
-        <div
-          class="forecast-windows-empty ${weatherEntity ? 'clickable' : ''}"
-          @click=${() => this._handleMoreInfo(weatherEntity)}
-          title="${weatherEntity ? `View weather forecast for ${weatherEntity}` : ''}"
-        >
-          <ha-icon icon="mdi:weather-sunny-off"></ha-icon>
-          <span>No ventilation windows predicted in upcoming forecast</span>
-        </div>
-      `;
-    }
-
-    return html`
-      <div
-        class="forecast-windows-section ${weatherEntity ? 'clickable' : ''}"
-        @click=${() => this._handleMoreInfo(weatherEntity)}
-        title="${weatherEntity ? `View weather forecast for ${weatherEntity}` : ''}"
-      >
-        <div class="windows-list">
-          ${windows.map(
-      (win) => html`
-              <div class="window-row ${win.isCurrent ? 'active-window' : ''}">
-                <div class="window-time-range">
-                  <span class="start-time">${win.formattedStart}</span>
-                  <ha-icon icon="mdi:arrow-right-thin" class="arrow-icon"></ha-icon>
-                  <span class="end-time">${win.formattedEnd}</span>
-                </div>
-                <div class="window-badge-meta">
-                  ${win.isCurrent
-          ? html`<span class="active-tag"><ha-icon icon="mdi:check-circle"></ha-icon> Active Now</span>`
-          : html`<span class="duration-tag"><ha-icon icon="mdi:clock-outline"></ha-icon> ${win.durationHours}h</span>`}
-                </div>
-              </div>
-            `,
-    )}
+        <div class="ticks">
+          ${ticks
+            .filter((t) => Math.abs(x(t) - x(now)) > W * 0.06) // keep clear of the "now" label
+            .map((t) => html`<span style="left:${(x(t) / W) * 100}%">${clock(t)}</span>`)}
+          <span class="now-label" style="left:${(x(now) / W) * 100}%">${localize('card.now')}</span>
         </div>
       </div>
     `;
   }
-
-  private _renderWindowBadge(advice: RoomAdvice, room?: RoomConfig): TemplateResult {
-    const isCorrect = advice.windowCorrect;
-    const stateLabel = advice.windowState === 'open'
-      ? localize('window.open')
-      : localize('window.closed');
-    const windowIcon = advice.windowState === 'open'
-      ? 'mdi:window-open-variant'
-      : 'mdi:window-closed-variant';
-
-    const badgeClass = isCorrect === null
-      ? ''
-      : isCorrect
-        ? 'window-correct'
-        : 'window-incorrect';
-
-    const windowEntity = room?.window_sensor;
-
-    return html`
-      <span
-        class="window-badge ${badgeClass} ${windowEntity ? 'clickable' : ''}"
-        @click=${(e: Event) => {
-        if (windowEntity) {
-          e.stopPropagation();
-          this._handleMoreInfo(windowEntity);
-        }
-      }}
-        title="${windowEntity ? `View history graph for ${windowEntity}` : ''}"
-      >
-        <ha-icon icon="${windowIcon}"></ha-icon>
-        ${stateLabel}
-        ${isCorrect === true ? html`<ha-icon icon="mdi:check"></ha-icon>` : nothing}
-        ${isCorrect === false ? html`<ha-icon icon="mdi:alert"></ha-icon>` : nothing}
-      </span>
-    `;
-  }
-
-  private _renderSuggestionBadge(advice: RoomAdvice): TemplateResult {
-    const showNextState = this.config.show_next_state_change !== false;
-    const nextState = showNextState ? advice.nextStateChange : null;
-
-    if (nextState) {
-      const isOpen = nextState.targetState === 'open';
-      const label = isOpen
-        ? localize('forecast.next_state_open', { time: nextState.formattedTime })
-        : localize('forecast.next_state_closed', { time: nextState.formattedTime });
-      const icon = isOpen ? 'mdi:window-open-variant' : 'mdi:window-closed-variant';
-      const badgeClass = isOpen ? 'to-open' : 'to-closed';
-
-      return html`
-        <div
-          class="suggestion-badge ${badgeClass}"
-          title="Time to next state change (${nextState.targetState})"
-        >
-          <ha-icon icon="${icon}"></ha-icon>
-          <span class="suggestion-text">${label}</span>
-        </div>
-      `;
-    }
-
-    const icon = this._getStatusIcon(advice.status);
-    const label = localize(`status.${advice.status}`);
-
-    return html`
-      <div class="suggestion-badge status-${advice.status}">
-        <ha-icon icon="${icon}"></ha-icon>
-        <span class="suggestion-text">${label}</span>
-      </div>
-    `;
-  }
-
-  private _renderSkeleton(): TemplateResult {
-    return html`
-      <ha-card>
-        <div class="skeleton-content">
-          <div class="skeleton skeleton-outdoor"></div>
-          <div class="skeleton skeleton-room"></div>
-          <div class="skeleton skeleton-room"></div>
-        </div>
-      </ha-card>
-    `;
-  }
-
-  private _getEffectiveForecast(): ForecastEntry[] {
-    let effectiveForecast: ForecastEntry[] = this.forecast;
-    if ((!effectiveForecast || effectiveForecast.length === 0) && this.config?.weather_entity && this.hass) {
-      const weatherState = this.hass.states[this.config.weather_entity];
-      if (weatherState?.attributes?.forecast) {
-        effectiveForecast = extractForecastItems(weatherState.attributes.forecast, this.config.weather_entity);
-      }
-    }
-    return effectiveForecast;
-  }
-
-  /* ── System Diagnostics / Health Checks ─────────────────────── */
-
-  private _getHealthIssues(): HealthIssue[] {
-    const issues: HealthIssue[] = [];
-    if (!this.hass || !this.config) return issues;
-
-    // Outdoor temp sensor check
-    if (this.config.outdoor_temperature) {
-      const stateObj = this.hass.states[this.config.outdoor_temperature];
-      if (!stateObj) {
-        issues.push({
-          type: 'missing_entity',
-          severity: 'warning',
-          entityId: this.config.outdoor_temperature,
-          message: `Outdoor temp sensor non-existent: ${this.config.outdoor_temperature}`,
-        });
-      } else if (stateObj.state === 'unavailable' || stateObj.state === 'unknown') {
-        issues.push({
-          type: 'unavailable',
-          severity: 'warning',
-          entityId: this.config.outdoor_temperature,
-          message: `Outdoor temp sensor is ${stateObj.state}: ${this.config.outdoor_temperature}`,
-        });
-      }
-    }
-
-    // Outdoor humidity sensor check
-    if (this.config.outdoor_humidity) {
-      const stateObj = this.hass.states[this.config.outdoor_humidity];
-      if (!stateObj) {
-        issues.push({
-          type: 'missing_entity',
-          severity: 'warning',
-          entityId: this.config.outdoor_humidity,
-          message: `Outdoor humidity sensor non-existent: ${this.config.outdoor_humidity}`,
-        });
-      } else if (stateObj.state === 'unavailable' || stateObj.state === 'unknown') {
-        issues.push({
-          type: 'unavailable',
-          severity: 'warning',
-          entityId: this.config.outdoor_humidity,
-          message: `Outdoor humidity sensor is ${stateObj.state}: ${this.config.outdoor_humidity}`,
-        });
-      }
-    }
-
-    // Weather entity check
-    if (this.config.weather_entity) {
-      const stateObj = this.hass.states[this.config.weather_entity];
-      if (!stateObj) {
-        issues.push({
-          type: 'missing_entity',
-          severity: 'warning',
-          entityId: this.config.weather_entity,
-          message: `Weather entity non-existent: "${this.config.weather_entity}"`,
-        });
-      } else if (stateObj.state === 'unavailable' || stateObj.state === 'unknown') {
-        issues.push({
-          type: 'unavailable',
-          severity: 'warning',
-          entityId: this.config.weather_entity,
-          message: `Weather entity "${this.config.weather_entity}" is ${stateObj.state}`,
-        });
-      } else {
-        const effectiveForecast = this._getEffectiveForecast();
-        if (effectiveForecast.length === 0 && !this._subscribingEntity) {
-          issues.push({
-            type: 'forecast_error',
-            severity: 'warning',
-            entityId: this.config.weather_entity,
-            message: `Weather entity "${this.config.weather_entity}" has no forecast data available`,
-          });
-        }
-      }
-    } else {
-      issues.push({
-        type: 'invalid_config',
-        severity: 'warning',
-        message: 'No Weather Entity configured — forecast prediction timelines are disabled',
-      });
-    }
-
-    // Room sensors checks
-    const rooms = this.config.rooms || [];
-    for (const room of rooms) {
-      if (!room.temperature) {
-        issues.push({
-          type: 'invalid_config',
-          severity: 'error',
-          message: `Room "${room.name || 'Unnamed'}" has no temperature sensor configured`,
-        });
-      } else {
-        const stateObj = this.hass.states[room.temperature];
-        if (!stateObj) {
-          issues.push({
-            type: 'missing_entity',
-            severity: 'warning',
-            entityId: room.temperature,
-            message: `Room "${room.name}": Temp sensor non-existent (${room.temperature})`,
-          });
-        } else if (stateObj.state === 'unavailable' || stateObj.state === 'unknown') {
-          issues.push({
-            type: 'unavailable',
-            severity: 'warning',
-            entityId: room.temperature,
-            message: `Room "${room.name}": Temp sensor is ${stateObj.state} (${room.temperature})`,
-          });
-        }
-      }
-
-      if (room.humidity) {
-        const stateObj = this.hass.states[room.humidity];
-        if (!stateObj) {
-          issues.push({
-            type: 'missing_entity',
-            severity: 'warning',
-            entityId: room.humidity,
-            message: `Room "${room.name}": Humidity sensor non-existent (${room.humidity})`,
-          });
-        } else if (stateObj.state === 'unavailable' || stateObj.state === 'unknown') {
-          issues.push({
-            type: 'unavailable',
-            severity: 'warning',
-            entityId: room.humidity,
-            message: `Room "${room.name}": Humidity sensor is ${stateObj.state} (${room.humidity})`,
-          });
-        }
-      }
-
-      if (room.window_sensor) {
-        const stateObj = this.hass.states[room.window_sensor];
-        if (!stateObj) {
-          issues.push({
-            type: 'missing_entity',
-            severity: 'warning',
-            entityId: room.window_sensor,
-            message: `Room "${room.name}": Window sensor non-existent (${room.window_sensor})`,
-          });
-        } else if (stateObj.state === 'unavailable' || stateObj.state === 'unknown') {
-          issues.push({
-            type: 'unavailable',
-            severity: 'warning',
-            entityId: room.window_sensor,
-            message: `Room "${room.name}": Window sensor is ${stateObj.state} (${room.window_sensor})`,
-          });
-        }
-      }
-    }
-
-    return issues;
-  }
-
-  /* ── Helpers ──────────────────────────────────────────────── */
-
-  private _getStatusIcon(status: VentilationStatus): string {
-    switch (status) {
-      case VentilationStatus.VENTILATE_NOW:
-        return 'mdi:window-open-variant';
-      case VentilationStatus.DO_NOT_VENTILATE:
-        return 'mdi:window-closed-variant';
-      case VentilationStatus.CAUTION:
-        return 'mdi:alert-outline';
-      default:
-        return 'mdi:help-circle-outline';
-    }
-  }
-
-  private _getTrackedEntities(): string[] {
-    const entities: string[] = [];
-
-    if (this.config.goal_entity) entities.push(this.config.goal_entity);
-    if (this.config.outdoor_temperature) entities.push(this.config.outdoor_temperature);
-    if (this.config.outdoor_humidity) entities.push(this.config.outdoor_humidity);
-    if (this.config.weather_entity) entities.push(this.config.weather_entity);
-
-    for (const room of this.config.rooms || []) {
-      if (room.temperature) entities.push(room.temperature);
-      if (room.humidity) entities.push(room.humidity);
-      if (room.window_sensor) entities.push(room.window_sensor);
-      if (room.outdoor_temperature_override) entities.push(room.outdoor_temperature_override);
-      if (room.outdoor_humidity_override) entities.push(room.outdoor_humidity_override);
-    }
-
-    return entities.filter(Boolean);
-  }
-
-  private _subscribingEntity?: string;
-
-  private async _subscribeForecast(): Promise<void> {
-    const entityId = this.config?.weather_entity;
-    if (!this.hass || !entityId) return;
-
-    if (this._subscribedEntity === entityId || this._subscribingEntity === entityId) return;
-
-    this._unsubscribeForecast();
-    this._subscribingEntity = entityId;
-
-    try {
-      const unsub = await subscribeForecast(
-        this.hass,
-        entityId,
-        (forecast) => {
-          this.forecast = forecast;
-          this.requestUpdate();
-        },
-      );
-
-      if (this._subscribingEntity === entityId) {
-        this._forecastUnsub = unsub;
-        this._subscribedEntity = entityId;
-      } else {
-        try {
-          unsub();
-        } catch (e) {
-          // ignore
-        }
-      }
-    } catch (e) {
-      console.warn('Ventilation Card: Could not subscribe to forecast:', e);
-    } finally {
-      if (this._subscribingEntity === entityId) {
-        this._subscribingEntity = undefined;
-      }
-    }
-  }
-
-  private _unsubscribeForecast(): void {
-    this._subscribingEntity = undefined;
-    this._subscribedEntity = undefined;
-    if (this._forecastUnsub) {
-      try {
-        this._forecastUnsub();
-      } catch (e) {
-        // ignore errors during unsub
-      }
-      this._forecastUnsub = undefined;
-    }
-  }
-
-  public getCardSize(): number {
-    return 2 + (this.config?.rooms?.length || 1) * 2;
-  }
-
-  public getGridOptions() {
-    return {
-      columns: 12,
-      min_columns: 9,
-      rows: 'auto',
-    };
-  }
-
-  public getLayoutOptions() {
-    return {
-      grid_columns: 12,
-      grid_min_columns: 9,
-      grid_rows: 'auto',
-    };
-  }
-}
-
-function toDate(val: any): Date {
-  if (val instanceof Date) return val;
-  if (typeof val === 'number') return new Date(val);
-  if (typeof val === 'string') return new Date(val);
-  return new Date();
-}
-
-function buildSplinePath(pts: Array<{ x: number; y: number }>): string {
-  if (!pts || pts.length < 2) return '';
-
-  let path = `M ${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const p0 = pts[i];
-    const p1 = pts[i + 1];
-    const cp1x = p0.x + (p1.x - p0.x) / 3;
-    const cp1y = p0.y;
-    const cp2x = p0.x + 2 * (p1.x - p0.x) / 3;
-    const cp2y = p1.y;
-    path += ` C ${cp1x.toFixed(1)},${cp1y.toFixed(1)} ${cp2x.toFixed(1)},${cp2y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)}`;
-  }
-  return path;
-}
-
-function splitPointsByTime<T extends { x: number; y: number; dateMs: number }>(
-  points: T[],
-  nowMs: number,
-): { pastPts: T[]; futurePts: T[] } {
-  if (!points || points.length === 0) {
-    return { pastPts: [], futurePts: [] };
-  }
-
-  const pastPts = points.filter((p) => p.dateMs <= nowMs);
-  const futurePts = points.filter((p) => p.dateMs >= nowMs);
-
-  if (pastPts.length === 0) {
-    return { pastPts: [], futurePts: points };
-  }
-
-  if (futurePts.length === 0) {
-    return { pastPts: points, futurePts: [] };
-  }
-
-  // If the last past point and first future point are the same (exactly at now), no interpolation needed
-  if (pastPts[pastPts.length - 1] === futurePts[0]) {
-    return { pastPts, futurePts };
-  }
-
-  // Interpolate a synthetic point at exactly nowMs so both paths meet at the NOW divider
-  const lastPast = pastPts[pastPts.length - 1];
-  const firstFuture = futurePts[0];
-  const tRange = firstFuture.dateMs - lastPast.dateMs;
-
-  if (tRange > 0) {
-    const t = (nowMs - lastPast.dateMs) / tRange;
-    const nowPoint = {
-      ...lastPast,
-      x: lastPast.x + (firstFuture.x - lastPast.x) * t,
-      y: lastPast.y + (firstFuture.y - lastPast.y) * t,
-      dateMs: nowMs,
-    };
-    pastPts.push(nowPoint);
-    futurePts.unshift(nowPoint);
-  } else {
-    pastPts.push(futurePts[0]);
-  }
-
-  return { pastPts, futurePts };
 }

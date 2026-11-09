@@ -1,891 +1,280 @@
 import { css } from 'lit';
 
 export const cardStyles = css`
-  /* ── Card container ───────────────────────────────────────── */
   :host {
-    --vc-green: var(--success-color, var(--label-badge-green, #4caf50));
-    --vc-red: var(--error-color, var(--label-badge-red, #f44336));
-    --vc-yellow: var(--warning-color, var(--label-badge-yellow, #ff9800));
-    --vc-blue: var(--info-color, var(--label-badge-blue, #2196f3));
-    --vc-spacing: 16px;
+    --vc-go: var(--success-color, #43a047);
+    --vc-stop: var(--error-color, #db4437);
+    --vc-wait: var(--warning-color, #ffa600);
+    --vc-warm: var(--deep-orange-color, #ff5722);
+    --vc-cold: var(--blue-color, #2196f3);
+    --vc-humid: var(--cyan-color, #00acc1);
+    --vc-muted: var(--secondary-text-color, #727272);
+    --vc-stat-width: 4.6em;
   }
-
   ha-card {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    overflow: hidden;
+    padding: 12px 12px 8px;
   }
-
-  .card-header-row {
+  .header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: var(--vc-spacing) var(--vc-spacing) 0 var(--vc-spacing);
-  }
-
-  .card-header-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--primary-text-color);
-    display: flex;
-    align-items: center;
     gap: 8px;
+    margin-bottom: 8px;
   }
-
-  .card-header-title .header-icon {
-    color: var(--primary-color);
-    --mdc-icon-size: 20px;
-  }
-
-  .goal-badge-wrapper {
-    position: relative;
-  }
-
-  .goal-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 4px 10px;
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--primary-color) 16%, transparent);
-    color: var(--primary-color);
-    border: 1px solid color-mix(in srgb, var(--primary-color) 30%, transparent);
-    transition: all 0.2s ease;
-  }
-
-  .goal-badge--interactive {
-    cursor: pointer;
-    user-select: none;
-  }
-
-  .goal-badge--interactive:hover {
-    background: color-mix(in srgb, var(--primary-color) 24%, transparent);
-    border-color: color-mix(in srgb, var(--primary-color) 50%, transparent);
-    transform: translateY(-1px);
-  }
-
-  .goal-badge__chevron {
-    --mdc-icon-size: 14px;
-    margin-left: 2px;
-    opacity: 0.8;
-  }
-
-  /* Mode selection dropdown */
-  .goal-dropdown-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 100;
-    background: var(--card-background-color, #1c1c1e);
-    border: 1px solid var(--divider-color, rgba(255, 255, 255, 0.12));
-    border-radius: 10px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
-    padding: 6px;
-    min-width: 170px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    backdrop-filter: blur(10px);
-  }
-
-  .goal-dropdown-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 12px;
+  .title {
+    font-size: 1.15em;
     font-weight: 500;
-    color: var(--primary-text-color);
-    cursor: pointer;
-    background: transparent;
-    border: none;
-    text-align: left;
-    width: 100%;
-    transition: background 0.15s ease, color 0.15s ease;
   }
-
-  .goal-dropdown-item ha-icon {
-    --mdc-icon-size: 16px;
-    color: var(--secondary-text-color);
-  }
-
-  .goal-dropdown-item:hover {
-    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
-    color: var(--primary-color);
-  }
-
-  .goal-dropdown-item:hover ha-icon {
-    color: var(--primary-color);
-  }
-
-  .goal-dropdown-item--selected {
-    background: color-mix(in srgb, var(--primary-color) 18%, transparent);
-    color: var(--primary-color);
-    font-weight: 600;
-  }
-
-  .goal-dropdown-item--selected ha-icon {
-    color: var(--primary-color);
-  }
-
-  .goal-dropdown-backdrop {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 99;
-  }
-
-  /* ── Diagnostics Banner ──────────────────────────────────── */
-  .health-banner {
-    background: color-mix(in srgb, var(--vc-yellow) 10%, var(--secondary-background-color));
-    border: 1px solid color-mix(in srgb, var(--vc-yellow) 30%, transparent);
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-bottom: var(--vc-spacing);
-    font-size: 12px;
-  }
-
-  .health-banner-title {
-    font-weight: 600;
-    color: var(--vc-yellow);
+  .metrics {
     display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-bottom: 6px;
-  }
-
-  .health-banner-title ha-icon {
-    --mdc-icon-size: 16px;
-  }
-
-  .health-issue-list {
-    display: flex;
-    flex-direction: column;
     gap: 4px;
-    margin: 0;
-    padding-left: 0;
-    list-style: none;
   }
-
-  .health-issue-item {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    color: var(--primary-text-color);
-  }
-
-  .health-issue-item ha-icon {
-    --mdc-icon-size: 14px;
-    color: var(--vc-yellow);
-    flex-shrink: 0;
-    margin-top: 1px;
-  }
-
-  .card-content {
-    padding: 12px var(--vc-spacing) var(--vc-spacing) var(--vc-spacing);
-  }
-
-  /* ── Outdoor section ──────────────────────────────────────── */
-  .outdoor-section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 4px 0 12px 0;
-    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
-    margin-bottom: var(--vc-spacing);
-  }
-
-  .outdoor-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    cursor: pointer;
-    user-select: none;
-    padding: 4px 0;
-  }
-
-  .outdoor-title-group {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-  }
-
-  .outdoor-icon-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
-    color: var(--primary-color);
-  }
-
-  .outdoor-icon-avatar ha-icon {
-    --mdc-icon-size: 18px;
-  }
-
-  .outdoor-name {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--primary-text-color);
-  }
-
-  .outdoor-weather-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    font-weight: 500;
-    text-transform: capitalize;
+  .chip {
+    font: inherit;
+    font-size: 0.75em;
     padding: 2px 8px;
     border-radius: 12px;
-    background: color-mix(in srgb, var(--vc-blue, #2196f3) 12%, transparent);
-    color: var(--vc-blue, #2196f3);
-    white-space: nowrap;
-    transition: background-color 0.2s ease;
-  }
-
-  .outdoor-weather-badge ha-icon {
-    --mdc-icon-size: 15px;
-  }
-
-  .outdoor-header-badges {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .outdoor-details-trigger {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-    color: var(--secondary-text-color);
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .outdoor-details-trigger:hover {
-    background: color-mix(in srgb, var(--primary-color) 20%, transparent);
-    color: var(--primary-color);
-  }
-
-  .outdoor-details-trigger ha-icon {
-    --mdc-icon-size: 16px;
-  }
-
-  .climate-pill-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    padding: 3px 9px;
-    border-radius: 14px;
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-    color: var(--primary-text-color);
-    white-space: nowrap;
-    transition: background 0.15s ease;
-  }
-
-  .climate-pill-badge.clickable {
+    border: 1px solid var(--divider-color, #ccc);
+    background: none;
+    color: var(--vc-muted);
     cursor: pointer;
   }
-
-  .climate-pill-badge.clickable:hover {
-    background: color-mix(in srgb, var(--primary-color) 18%, transparent);
-    color: var(--primary-color);
+  .chip.on {
+    background: var(--primary-color, #03a9f4);
+    border-color: var(--primary-color, #03a9f4);
+    color: var(--text-primary-color, #fff);
   }
 
-  .climate-pill-badge ha-icon {
-    --mdc-icon-size: 14px;
-    color: var(--secondary-text-color);
+  /* The left edge colour is the advice at a glance */
+  .room {
+    --c: transparent;
+    border-left: 4px solid var(--c);
+    border-top: 1px solid var(--divider-color, #e0e0e0);
+    padding-left: 8px;
   }
-
-  .climate-pill-badge .pill-humidity-icon {
-    margin-left: 3px;
+  .room.outdoor {
+    border-top: none;
+    color: var(--vc-muted);
   }
-
-  .outdoor-expanded-panel {
-    margin-top: 8px;
-    margin-left: 0;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    animation: vc-slide-down 0.18s ease-out;
+  .room.air,
+  .room.open {
+    --c: var(--vc-go);
   }
-
-  /* ── Integrated Graph Card & Sparkline ─────────────────────── */
-  .integrated-graph-card {
-    position: relative;
-    background: transparent;
+  .room.close {
+    --c: var(--vc-stop);
+  }
+  .room.wait {
+    --c: var(--vc-wait);
+  }
+  .room.heat {
+    --c: var(--vc-warm);
+  }
+  .row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) repeat(3, var(--vc-stat-width));
+    align-items: start;
+    column-gap: 4px;
     padding: 6px 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    overflow: hidden;
   }
-
-  .graph-floating-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    z-index: 2;
-  }
-
-  .graph-current-stats {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-  }
-
-  .weighty-stat {
-    display: flex;
-    align-items: baseline;
-    gap: 4px;
-  }
-
-  .weighty-stat .stat-icon {
-    --mdc-icon-size: 16px;
-    color: var(--primary-color);
-    align-self: center;
-  }
-
-  .weighty-stat .stat-icon.room-temp {
-    color: var(--vc-green, #10b981);
-  }
-
-  .weighty-stat .stat-icon.temp {
-    color: var(--primary-color, #2196f3);
-  }
-
-  .weighty-stat .stat-icon.hum {
-    color: var(--vc-blue, #2196f3);
-  }
-
-  .weighty-stat .stat-icon.abs-hum {
-    color: var(--vc-blue, #2196f3);
-  }
-
-  .weighty-stat .weighty-value {
-    font-size: 20px;
-    font-weight: 700;
-    color: var(--primary-text-color);
-    line-height: 1;
-    letter-spacing: -0.5px;
-  }
-
-  .weighty-stat .weighty-unit {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--secondary-text-color);
-  }
-
-  .graph-range-pill {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--secondary-text-color);
-    background: color-mix(in srgb, var(--primary-text-color) 6%, transparent);
-    padding: 2px 8px;
-    border-radius: 10px;
-    transition: all 0.15s ease;
-  }
-
-  .graph-range-pill.clickable {
+  .row[role='button'] {
     cursor: pointer;
   }
-
-  .graph-range-pill.clickable:hover {
-    background: color-mix(in srgb, var(--primary-color) 16%, transparent);
-    color: var(--primary-color);
+  .row:focus-visible,
+  .chip:focus-visible {
+    outline: 2px solid var(--primary-color, #03a9f4);
+    outline-offset: 2px;
+  }
+  .name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-weight: 500;
+  }
+  .name span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .name ha-icon {
+    --mdc-icon-size: 20px;
+    flex: none;
+    color: var(--vc-muted);
+  }
+  .stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    line-height: 1.2;
+  }
+  .value {
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+  }
+  small {
+    font-size: 0.7em;
+    font-weight: 400;
+    color: var(--vc-muted);
+    margin-left: 1px;
+  }
+  .sub {
+    font-size: 0.7em;
+    color: var(--vc-muted);
+    white-space: nowrap;
+    min-height: 1.2em;
+  }
+  .outdoor .sub {
+    display: none;
+  }
+  .stat.warm .value {
+    color: var(--vc-warm);
+  }
+  .stat.cold .value {
+    color: var(--vc-cold);
+  }
+  .stat.humid .value {
+    color: var(--vc-humid);
+  }
+  .hint {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+    color: var(--vc-muted);
+  }
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex: none;
+    background: var(--c);
+    border: 1px solid var(--divider-color, #ccc);
+  }
+  .room:not(.ok):not(.unknown) .hint {
+    color: var(--primary-text-color, #212121);
+  }
+  .room:not(.ok):not(.unknown) .dot {
+    border-color: var(--c);
   }
 
-  .forecast-svg-chart,
-  .prediction-svg-chart {
+  .graphs {
+    padding: 2px 0 8px;
+  }
+  .chart {
+    margin-top: 6px;
+  }
+  .chart-head {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 2px 8px;
+    font-size: 0.75em;
+  }
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    color: var(--vc-muted);
+  }
+  .legend i {
+    display: inline-block;
+    width: 12px;
+    margin-right: 3px;
+    vertical-align: middle;
+    border-top: 2px solid currentColor;
+  }
+  .legend i.dashed {
+    border-top-style: dashed;
+  }
+  .in {
+    color: var(--primary-color, #03a9f4);
+  }
+  .out {
+    color: var(--vc-muted);
+  }
+  .go {
+    color: var(--vc-go);
+  }
+  .plot {
+    position: relative;
+    height: 72px;
+  }
+  svg {
     width: 100%;
     height: 100%;
     display: block;
     overflow: visible;
   }
-
-  .graph-time-axis {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    font-size: 10px;
-    color: var(--secondary-text-color);
-    padding-top: 4px;
-    border-top: 1px dashed var(--divider-color, rgba(255, 255, 255, 0.08));
+  svg * {
+    vector-effect: non-scaling-stroke;
+    fill: none;
   }
-
-  .outdoor-forecast-empty {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--secondary-text-color);
-    padding: 6px 0;
+  polyline {
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linejoin: round;
   }
-
-  /* ── Rooms Container & Rows ────────────────────────────────── */
-  .rooms-container {
-    display: flex;
-    flex-direction: column;
+  polyline.out {
+    stroke-width: 1.25;
   }
-
-  .room-row {
-    padding: 12px 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    position: relative;
-    cursor: pointer;
-    border-bottom: 1px solid var(--divider-color, rgba(255, 255, 255, 0.08));
-    transition: background-color 0.15s ease;
+  .dashed {
+    stroke-dasharray: 4 3;
   }
-
-  .room-row:last-child {
-    border-bottom: none;
-    padding-bottom: 0;
+  line.grid {
+    stroke: var(--divider-color, #e0e0e0);
+    stroke-width: 0.5;
   }
-
-  .room-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
+  line.now {
+    stroke: var(--primary-text-color, #212121);
+    stroke-width: 1;
+    opacity: 0.5;
   }
-
-  .room-title-group {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
+  line.ref {
+    stroke: var(--vc-go);
+    stroke-width: 1;
+    stroke-dasharray: 1 3;
   }
-
-  .room-icon-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: background-color 0.2s ease, color 0.2s ease;
-  }
-
-  .room-icon-avatar ha-icon {
-    --mdc-icon-size: 18px;
-  }
-
-  .room-icon-avatar.status-ventilate_now {
-    background: color-mix(in srgb, var(--vc-green) 16%, transparent);
-    color: var(--vc-green);
-  }
-
-  .room-icon-avatar.status-do_not_ventilate {
-    background: color-mix(in srgb, var(--vc-red) 12%, transparent);
-    color: var(--vc-red);
-  }
-
-  .room-icon-avatar.status-caution {
-    background: color-mix(in srgb, var(--vc-yellow) 16%, transparent);
-    color: var(--vc-yellow);
-  }
-
-  .room-icon-avatar.status-unknown {
-    background: color-mix(in srgb, var(--disabled-text-color, #999) 12%, transparent);
-    color: var(--disabled-text-color, #999);
-  }
-
-  .room-name {
-    font-size: 15px;
-    font-weight: 500;
-    color: var(--primary-text-color);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .room-header-badges {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-
-  .suggestion-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    font-weight: 600;
-    padding: 3px 10px;
-    border-radius: 14px;
-    white-space: nowrap;
-    transition: all 0.2s ease;
-  }
-
-  .suggestion-badge ha-icon {
-    --mdc-icon-size: 15px;
-  }
-
-  .suggestion-badge.status-ventilate_now {
-    background: color-mix(in srgb, var(--vc-green) 16%, transparent);
-    color: var(--vc-green);
-  }
-
-  .suggestion-badge.status-do_not_ventilate {
-    background: color-mix(in srgb, var(--vc-red) 12%, transparent);
-    color: var(--vc-red);
-  }
-
-  .suggestion-badge.status-caution {
-    background: color-mix(in srgb, var(--vc-yellow) 16%, transparent);
-    color: var(--vc-yellow);
-  }
-
-  .suggestion-badge.status-unknown {
-    background: color-mix(in srgb, var(--disabled-text-color, #999) 12%, transparent);
-    color: var(--disabled-text-color, #999);
-  }
-
-  .suggestion-badge.to-open {
-    background: color-mix(in srgb, var(--vc-green) 16%, transparent);
-    color: var(--vc-green);
-  }
-
-  .suggestion-badge.to-closed {
-    background: color-mix(in srgb, var(--vc-yellow) 16%, transparent);
-    color: var(--vc-yellow);
-  }
-
-  /* ── Window status ────────────────────────────────────────── */
-  .window-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 2px 8px;
-    border-radius: 10px;
-    white-space: nowrap;
-  }
-
-  .window-badge ha-icon {
-    --mdc-icon-size: 14px;
-  }
-
-  .window-badge.window-correct {
-    background: color-mix(in srgb, var(--vc-green) 15%, transparent);
-    color: var(--vc-green);
-  }
-
-  .window-badge.window-incorrect {
-    background: color-mix(in srgb, var(--vc-red) 15%, transparent);
-    color: var(--vc-red);
-  }
-
-  /* ── Interactive Clickable Elements ───────────────────────── */
-  .clickable {
-    cursor: pointer;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
-    transition: transform 0.15s ease, opacity 0.15s ease, background-color 0.15s ease;
-  }
-
-  .clickable:hover {
-    opacity: 0.85;
-  }
-
-  .window-badge.clickable:hover {
-    transform: scale(1.04);
-  }
-
-  /* ── Upcoming Ventilation Windows List ────────────────────── */
-  .forecast-windows-section {
-    margin-top: 6px;
-    margin-left: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .windows-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding-left: 2px;
-  }
-
-  .window-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 3px 8px;
-    border-left: 2px solid var(--divider-color, rgba(255, 255, 255, 0.15));
-    font-size: 12px;
-    transition: background-color 0.15s ease, border-color 0.15s ease;
-  }
-
-  .window-row.active-window {
-    border-left-color: var(--vc-green, #4caf50);
-    background: color-mix(in srgb, var(--vc-green, #4caf50) 8%, transparent);
-    border-radius: 0 4px 4px 0;
-  }
-
-  .window-time-range {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-weight: 500;
-    color: var(--primary-text-color);
-  }
-
-  .window-time-range .arrow-icon {
-    --mdc-icon-size: 14px;
-    color: var(--secondary-text-color);
-  }
-
-  .window-badge-meta {
-    flex-shrink: 0;
-  }
-
-  .active-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--vc-green, #4caf50);
-  }
-
-  .active-tag ha-icon {
-    --mdc-icon-size: 13px;
-  }
-
-  .duration-tag {
-    display: inline-flex;
-    align-items: center;
-    gap: 3px;
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--secondary-text-color);
-  }
-
-  .duration-tag ha-icon {
-    --mdc-icon-size: 12px;
-  }
-
-  .forecast-windows-empty {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--secondary-text-color);
-    margin-left: 0;
-    margin-top: 4px;
-  }
-
-  .forecast-windows-empty ha-icon {
-    --mdc-icon-size: 15px;
-  }
-
-  /* ── Skeleton loading ─────────────────────────────────────── */
-  .skeleton-content {
-    padding: var(--vc-spacing);
-  }
-
-  .skeleton {
-    background: linear-gradient(
-      90deg,
-      var(--secondary-background-color) 25%,
-      color-mix(in srgb, var(--secondary-background-color) 50%, transparent) 50%,
-      var(--secondary-background-color) 75%
-    );
-    background-size: 200% 100%;
-    animation: shimmer 1.5s infinite;
-    border-radius: 4px;
-  }
-
-  .skeleton-outdoor {
-    height: 40px;
-    border-radius: 4px;
-    margin-bottom: var(--vc-spacing);
-  }
-
-  .skeleton-room {
-    height: 60px;
-    border-radius: 4px;
-    margin-bottom: 8px;
-  }
-
-  @keyframes shimmer {
-    0% {
-      background-position: -200% 0;
-    }
-    100% {
-      background-position: 200% 0;
-    }
-  }
-
-  /* ── Compact Next Window Summary Chip ───────────────────── */
-  .compact-next-window-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 3px 8px;
-    border-radius: 4px;
-    background: color-mix(in srgb, var(--primary-text-color) 4%, transparent);
-    color: var(--primary-text-color);
-    border: 1px solid color-mix(in srgb, var(--primary-text-color) 12%, transparent);
-    cursor: pointer;
-    transition: all 0.15s ease;
-    margin-left: 0;
-    margin-top: 4px;
-    width: fit-content;
-  }
-
-  .compact-next-window-chip:hover {
-    background: color-mix(in srgb, var(--primary-color) 12%, transparent);
-    border-color: var(--primary-color);
-  }
-
-  .compact-next-window-chip.is-active {
-    background: color-mix(in srgb, var(--vc-green) 10%, transparent);
-    color: var(--vc-green);
-    border-color: color-mix(in srgb, var(--vc-green) 30%, transparent);
-  }
-
-  .compact-next-window-chip.is-active:hover {
-    background: color-mix(in srgb, var(--vc-green) 20%, transparent);
-  }
-
-  .compact-next-window-chip ha-icon {
-    --mdc-icon-size: 14px;
-    flex-shrink: 0;
-  }
-
-  /* ── Room Details Trigger Button ──────────────────────────── */
-  .room-details-trigger {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    background: color-mix(in srgb, var(--primary-text-color) 8%, transparent);
-    color: var(--secondary-text-color);
-    cursor: pointer;
-    transition: all 0.2s ease;
-  }
-
-  .room-details-trigger:hover {
-    background: color-mix(in srgb, var(--primary-color) 20%, transparent);
-    color: var(--primary-color);
-  }
-
-  .room-details-trigger ha-icon {
-    --mdc-icon-size: 16px;
-  }
-
-  /* ── Inline Expandable Room Panels ────────────────────────── */
-  .room-expanded-panel {
-    margin-top: 8px;
-    margin-left: 0;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    animation: vc-slide-down 0.18s ease-out;
-  }
-
-  @keyframes vc-slide-down {
-    from {
-      opacity: 0;
-      transform: translateY(-3px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
-
-  /* ── Responsive ───────────────────────────────────────────── */
-  @media (max-width: 400px) {
-    .forecast-windows-section,
-    .forecast-windows-empty,
-    .compact-next-window-chip,
-    .room-expanded-panel {
-      margin-left: 0;
-    }
-  }
-
-  /* ── Interactive Graph Hover & Crosshair ───────────────────── */
-  .graph-svg-wrapper {
-    position: relative;
-    width: 100%;
-    height: 70px;
-    cursor: crosshair;
-    touch-action: none;
-  }
-
-  .hover-crosshair {
-    stroke: var(--primary-color, #2196f3);
-    stroke-width: 1.5;
-    stroke-dasharray: 3 3;
-    opacity: 0.9;
+  .ymax,
+  .ymin,
+  .yref {
+    position: absolute;
+    left: 0;
+    font-size: 0.65em;
+    color: var(--vc-muted);
     pointer-events: none;
   }
-
-  .now-divider-line {
-    stroke: var(--secondary-text-color, #8e8e93);
-    stroke-width: 1.2;
-    stroke-dasharray: 2 2;
-    opacity: 0.6;
+  .ymax {
+    top: 0;
   }
-
-  .now-divider-label {
-    fill: var(--secondary-text-color, #8e8e93);
-    font-size: 8px;
-    font-weight: 600;
-    text-anchor: middle;
-    letter-spacing: 0.5px;
-    opacity: 0.85;
+  .ymin {
+    bottom: 0;
   }
-
-  .hover-marker {
-    fill: var(--ha-card-background, var(--card-background-color, #1c1c1e));
-    stroke-width: 2.5;
-    transition: r 0.1s ease;
+  .yref {
+    left: auto;
+    right: 0;
+    transform: translateY(-100%);
+    color: var(--vc-go);
   }
-
-  .graph-floating-header .hover-time-tag {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--primary-color);
-    background: color-mix(in srgb, var(--primary-color) 14%, transparent);
-    padding: 2px 6px;
-    border-radius: 4px;
-    margin-left: 4px;
+  .ticks {
+    position: relative;
+    height: 1.2em;
+    font-size: 0.65em;
+    color: var(--vc-muted);
+  }
+  .ticks span {
+    position: absolute;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+  .ticks .now-label {
+    color: var(--primary-text-color, #212121);
+    background: var(--ha-card-background, var(--card-background-color, #fff));
+    padding: 0 2px;
+  }
+  .note {
+    margin-top: 6px;
+    font-size: 0.7em;
+    color: var(--vc-muted);
   }
 `;

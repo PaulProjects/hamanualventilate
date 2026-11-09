@@ -28,3 +28,13 @@ export function calculateAbsoluteHumidity(tempC: number, relHumidity: number): n
 
   return Math.round(ah * 10) / 10; // Round to 1 decimal
 }
+
+/**
+ * Inverse of calculateAbsoluteHumidity: the relative humidity (%) that air
+ * holding `ah` g/m³ of water has once it is at `tempC`. This is what outdoor
+ * air turns into after it has been let in and warmed/cooled to room temperature.
+ */
+export function relativeHumidityAt(ah: number, tempC: number): number {
+  const satFactor = Math.exp((17.67 * tempC) / (tempC + 243.5));
+  return Math.min(100, (ah * (273.15 + tempC)) / (6.112 * satFactor * 2.1674));
+}
