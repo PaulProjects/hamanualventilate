@@ -8,7 +8,7 @@ import { CARD_EDITOR_NAME, DEFAULT_GRAPH } from './const';
 
 const sensor = { entity: { domain: 'sensor' } };
 const degrees = { number: { min: 10, max: 30, step: 0.5, mode: 'box', unit_of_measurement: '°C' } };
-const hours = { number: { min: 6, max: 72, step: 6, mode: 'box', unit_of_measurement: 'h' } };
+const hours = { number: { min: 0, max: 168, step: 1, mode: 'box', unit_of_measurement: 'h' } };
 
 const CARD_SCHEMA = [
   { name: 'title', selector: { text: {} } },

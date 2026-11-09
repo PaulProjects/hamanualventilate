@@ -87,6 +87,7 @@ export class VentilationCard extends LitElement {
   private _subscribed?: string;
   private _timer?: number;
   private _loaded = false;
+  private _countingDown = false;
   private _learnedAt = 0;
 
   static styles = cardStyles;
@@ -104,12 +105,14 @@ export class VentilationCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
-    // Tick every minute so "x min ago" stays current; reload history every 10th tick
+    // Re-render every minute so "x min ago" stays current, every second while a
+    // countdown is in its last minutes; reload history every 10 minutes.
     let ticks = 0;
     this._timer = window.setInterval(() => {
-      this.requestUpdate();
-      if (++ticks % (REFRESH_MS / MINUTE) === 0) this._load();
-    }, MINUTE);
+      ticks++;
+      if (this._countingDown || ticks % 60 === 0) this.requestUpdate();
+      if (ticks % (REFRESH_MS / 1000) === 0) this._load();
+    }, 1000);
   }
 
   public disconnectedCallback(): void {
@@ -164,7 +167,8 @@ export class VentilationCard extends LitElement {
     const raw = await fetchHistory(
       hass,
       [c.outdoor_temperature, c.outdoor_humidity, ...temps, ...c.rooms.map((r) => r.humidity)],
-      c.history_hours ?? DEFAULT_HISTORY_HOURS,
+      // At least a day, so update intervals can be learned even when the graph shows less
+      Math.max(c.history_hours ?? DEFAULT_HISTORY_HOURS, 24),
     );
     this._hist = Object.fromEntries(Object.entries(raw).map(([id, r]) => [id, toSeries(r)]));
     this._interval = Object.fromEntries(Object.entries(raw).map(([id, r]) => [id, medianGap(r)]));
@@ -197,6 +201,7 @@ export class VentilationCard extends LitElement {
     if (!this.hass || !this.config) return nothing;
     const c = this.config;
     const now = Date.now();
+    this._countingDown = false; // set again below by any room close to its next update
     const horizon = now + (c.forecast_hours ?? DEFAULT_FORECAST_HOURS) * HOUR;
     const span: [number, number] = [now - (c.history_hours ?? DEFAULT_HISTORY_HOURS) * HOUR, horizon];
 
@@ -291,6 +296,9 @@ export class VentilationCard extends LitElement {
     const age = updated === null ? null : Math.max(0, ctx.now - updated);
     const every = this._interval[room.temperature] ?? this._interval[room.humidity ?? ''] ?? null;
     const late = age !== null && every !== null && age > 3 * every && age > 5 * MINUTE;
+    // Countdown to the next expected update; under a minute it counts seconds
+    const left = age === null || every === null ? null : every - age;
+    if (left !== null && left > 0 && left < 2 * MINUTE) this._countingDown = true;
     const expanded = this._expanded.has(idx);
     const toggle = () => this._toggle(idx);
 
@@ -320,27 +328,22 @@ export class VentilationCard extends LitElement {
           ${this._stat(ahIn, 'ah', room.humidity)}
           <div class="hint">
             <span class="dot"></span><span class="text">${hint}</span>
-            ${age === null ? nothing : html`<span class="age ${late ? 'late' : ''}">${localize('card.ago', { time: duration(age) })}</span>`}
+            ${age === null
+              ? nothing
+              : html`<span class="age ${late ? 'late' : ''}">
+                  ${localize('card.ago', { time: duration(age) })}${left !== null && left > 0
+                    ? ` · ${left < MINUTE ? `${Math.ceil(left / 1000)} s` : `${Math.round(left / MINUTE)} min`}`
+                    : ''}
+                </span>`}
           </div>
         </div>
-        ${expanded
-          ? html`
-              ${this._chart(room, a, { ...ctx, tIn, target, maxRh })}
-              ${age === null || every === null
-                ? nothing
-                : html`<div class="note">
-                    ${localize('card.updates_every', { time: duration(every) })} ·
-                    ${age > every ? localize('card.overdue', { time: duration(age - every) }) : localize('card.next_in', { time: duration(every - age) })}
-                  </div>`}
-            `
-          : nothing}
+        ${expanded ? this._chart(room, a, { ...ctx, tIn, target, maxRh }) : nothing}
       </div>
     `;
   }
 
   /**
-   * One graph per room: every metric keeps its own vertical scale (given in the legend),
-   * room and outdoor share it. Left of "now" is history, right is the forecast — the
+   * One graph per room: every metric keeps its own vertical scale, room and outdoor share it. Left of "now" is history, right is the forecast — the
    * dashed room temperature assumes the advice is followed.
    */
   private _chart(
@@ -351,6 +354,7 @@ export class VentilationCard extends LitElement {
     const W = 300;
     const H = 100;
     const { span, now } = ctx;
+    if (span[1] <= span[0]) return html``; // history and forecast both set to 0 hours
     const wanted = this.config.graph ?? DEFAULT_GRAPH;
     const roomT: Series = [...(this._hist[room.temperature] ?? []), ...(ctx.tIn !== null ? [[now, ctx.tIn] as [number, number]] : [])];
     const roomRh = this._hist[room.humidity ?? ''] ?? [];
@@ -381,7 +385,8 @@ export class VentilationCard extends LitElement {
       .filter((g) => g.own.length);
     if (!groups.length) return html`<div class="note">${localize('card.no_data')}</div>`;
 
-    const stepH = span[1] - span[0] > 60 * HOUR ? 12 : 6;
+    const hours = (span[1] - span[0]) / HOUR;
+    const stepH = hours > 60 ? 12 : hours > 18 ? 6 : hours > 6 ? 3 : 1;
     const first = new Date(span[0]);
     first.setHours(Math.ceil((first.getHours() + 1) / stepH) * stepH, 0, 0, 0);
     const ticks: number[] = [];
@@ -391,7 +396,7 @@ export class VentilationCard extends LitElement {
       <div class="chart">
         <div class="legend">
           ${groups.map(
-            (g) => html`<span class=${g.m}><i></i>${localize(`metric.${g.m}`)} ${fmt(g.lo, 0)}–${fmt(g.hi, 0)} ${UNIT[g.m]}</span>`,
+            (g) => html`<span class=${g.m}><i></i>${localize(`metric.${g.m}`)}</span>`,
           )}
           ${groups.some((g) => g.own.some((l) => l.outdoor)) ? html`<span><i class="thin"></i>${localize('card.outdoor')}</span>` : nothing}
         </div>

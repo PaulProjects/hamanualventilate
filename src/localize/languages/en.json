@@ -10,10 +10,7 @@
     "no_data": "no history yet",
     "graph": "History and forecast for {room}",
     "details": "show sensor details",
-    "ago": "{time} ago",
-    "updates_every": "Sensor updates about every {time}",
-    "next_in": "next in about {time}",
-    "overdue": "overdue by {time}"
+    "ago": "{time} ago"
   },
   "metric": {
     "t": "Temperature",

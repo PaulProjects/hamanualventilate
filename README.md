@@ -14,7 +14,7 @@ Every row always shows **temperature, relative humidity and absolute humidity**;
 
 The temperature turns orange when the room is too warm and blue when too cool; the humidity turns cyan above the ceiling. A window icon shows the window sensor, if configured.
 
-Click a value to open the details of its sensor. Each room also shows when its sensors last updated; it turns amber when an update is overdue. The card learns how often each sensor normally updates from its history and, with the room opened, says when the next update is expected.
+Click a value to open the details of its sensor. Each room also shows when its sensors last updated, followed by a countdown to the next expected update (e.g. `4 min ago · 6 min`, in seconds during the last minute). The card learns from each sensor's history how often it normally updates; the text turns amber when an update is clearly overdue.
 
 | Colour | Hint | When |
 |---|---|---|
@@ -31,7 +31,7 @@ Click a room to open its graph; any number of rooms can be open at once. It is a
 
 - thick lines are the room, thin lines the outdoor air, the dotted lines the desired temperature and the humidity ceiling;
 - the dashed temperature is the prediction, assuming you follow the card's advice;
-- each metric has its own vertical scale, given in the legend.
+- each metric has its own vertical scale; click a value in the row for exact numbers.
 
 Which metrics are drawn is set with `graph` in the card configuration.
 
@@ -76,8 +76,8 @@ rooms:
 | `outdoor_temperature` | string | – | Outdoor temperature sensor |
 | `outdoor_humidity` | string | – | Outdoor humidity sensor |
 | `graph` | list | `[temperature, humidity]` | Lines in the room graph: any of `temperature`, `humidity`, `absolute_humidity` |
-| `history_hours` | number | `24` | Hours of history in the graphs |
-| `forecast_hours` | number | `24` | Hours of forecast in the graphs |
+| `history_hours` | number | `24` | Hours of history in the graph; `0` hides the past |
+| `forecast_hours` | number | `24` | Hours of forecast in the graph and for predictions; `0` turns forecast, *wait* hints and end times off |
 | `rooms` | list | **required** | Rooms, see below |
 
 | Room option | Type | Description |
